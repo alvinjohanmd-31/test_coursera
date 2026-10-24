@@ -23,6 +23,28 @@
 
   const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
   const cen = (x) => 2 * x - 1;
+  const inScenario = (item, id) => (!item.only || item.only.includes(id)) && !(item.not && item.not.includes(id));
+
+  // Policies, KPIs and stakeholders with the scenario's renames and effect overrides applied.
+  const defCache = {};
+  function defs(scenario) {
+    if (defCache[scenario]) return defCache[scenario];
+    const m = SCEN[scenario].mods || {};
+    const merge = (list, mods) => list.map((x) => (mods && mods[x.id] ? Object.assign({}, x, mods[x.id]) : x));
+    const d = { pol: merge(C.policies, m.pol), var: merge(C.vars, m.var), grp: merge(C.groups, m.grp) };
+    d.POL = index(d.pol);
+    d.VAR = index(d.var);
+    d.GRP = index(d.grp);
+    d.sit = C.situations.filter((x) => inScenario(x, scenario));
+    d.dil = C.dilemmas.filter((x) => inScenario(x, scenario));
+    d.theories = C.theories.filter((x) => inScenario(x, scenario));
+    return (defCache[scenario] = d);
+  }
+  // Business theory for an arrow, preferring a scenario-specific one.
+  function theory(scenario, from, to) {
+    const list = defs(scenario).theories.filter((x) => x.from === from && x.to === to);
+    return list.find((x) => x.only) || list[0] || null;
+  }
 
   /* ------------------------------------------------------------- randomness */
 
@@ -61,6 +83,8 @@
   /* ---------------------------------------------------------------- helpers */
 
   const isOn = (s, id) => !!(s.pol[id] && s.pol[id].on);
+  // A flag is either permanent (true) or lasts until a quarter number.
+  const flagOn = (s, id) => { const f = s.flags[id]; return f === true || (typeof f === 'number' && f >= s.t); };
   const polEff = (s, id) => (s.pol[id] ? s.pol[id].eff : 0);
   // Effect multiplier of a policy: intensity for sliders, −1..+1 for bipolar.
   const polMag = (p, eff) => (p.kind === 'bipolar' ? cen(eff) : eff);
@@ -88,6 +112,7 @@
       if (k === 'f') return s.sig[key];
       if (k === 'g') return s.groups[key].h;
     }
+    if (id.startsWith('flag:')) return flagOn(s, id.slice(5)) ? 1 : 0;
     if (VAR[id]) return s.vars[id];
     if (POL[id]) return polEff(s, id);
     if (SIT[id]) return s.sit[id].on ? 1 : 0;
@@ -111,7 +136,7 @@
     for (const v of C.vars) tg[v.id] = v.base;
     if (explainId) parts.push({ kind: 'base', val: VAR[explainId].base });
     for (const k in s.baseAdj) add(k, s.baseAdj[k], 'struct');
-    for (const p of C.policies) {
+    for (const p of defs(s.scenario).pol) {
       const e = s.pol[p.id].eff;
       if (p.kind !== 'bipolar' && e < 1e-3) continue;
       const m = polMag(p, e);
@@ -155,7 +180,9 @@
     if (s.flags.esgFunds) add('shareholders', 0.10 * cen(s.vars.sustainability), 'flag', 'esgFunds');
     if (s.flags.pdpLaw) add('regulators', 0.08 * cen(polEff(s, 'cyber')), 'flag', 'pdpLaw');
     if (s.flags.carbonTax) add('regulators', 0.06 * cen(s.vars.sustainability), 'flag', 'carbonTax');
-    for (const p of C.policies) {
+    if (s.flags.aiRule) add('regulators', 0.10 * cen(s.vars.compliance) + 0.05 * cen(polEff(s, 'qualityctl')), 'flag', 'aiRule');
+    if (s.flags.eudr) add('customers', 0.08 * cen(s.vars.sustainability), 'flag', 'eudr');
+    for (const p of defs(s.scenario).pol) {
       const e = s.pol[p.id].eff;
       if (p.kind !== 'bipolar' && e < 1e-3) continue;
       const m = polMag(p, e);
@@ -208,7 +235,9 @@
 
   function sitScore(s, id) {
     const si = SIT[id];
+    if (!inScenario(si, s.scenario)) return 0;
     if (si.requires && !isOn(s, si.requires)) return 0;
+    if (si.requiresFlag && !flagOn(s, si.requiresFlag)) return 0;
     let num = 0, den = 0;
     for (const [sid, w, mode] of si.inputs) {
       let v = src(s, sid);
@@ -257,8 +286,9 @@
     const sc = SCEN[s.scenario], f = s.fin, m = s.macro, adj = finAdjust(s);
     const vol = volume(s);
     const priceFactor = 0.85 + 0.30 * s.pol.pricing.x;
-    const revenue = vol * priceFactor * Math.max(0.5, 1 + adj.revMult);
-    const inputIdx = m.input * (1 + 0.4 * (m.fx / MACRO_BASE.fx - 1));
+    const fxMove = m.fx / MACRO_BASE.fx - 1;
+    const revenue = vol * priceFactor * Math.max(0.5, 1 + adj.revMult) * (1 + (sc.fxRev || 0) * fxMove);
+    const inputIdx = m.input * (1 + (sc.fxCost ?? 0.4) * fxMove);
     const inputFactor = 1 + (inputIdx - 1) * 0.6 * (1 - 0.7 * polEff(s, 'hedging'));
     const cogsRatio = sc.cogs - 0.25 * (s.vars.efficiency - 0.5) + adj.cogsAdd;
     const cogs = vol * cogsRatio * inputFactor;
@@ -268,7 +298,7 @@
     const carbon = s.flags.carbonTax ? vol * 0.02 * sc.carbon * (1 - s.vars.sustainability) : 0;
     const items = [];
     let polCost = 0;
-    for (const p of C.policies) {
+    for (const p of defs(s.scenario).pol) {
       const c = policyCost(s, p, vol);
       if (Math.abs(c) > 1e-6) {
         polCost += c;
@@ -324,7 +354,7 @@
       + 1.4 * (clamp(yoy, -0.3, 0.6) - sc.gRef)
       + 0.30 * cen(v.innovation) + 0.15 * cen(v.brand) + 0.15 * cen(v.compliance)
       + (s.flags.esgFunds ? 0.18 : 0.06) * cen(v.sustainability)
-      + pl.psAdd - (f.ratingIdx >= 5 ? 0.15 * (f.ratingIdx - 4) : 0);
+      + Math.min(0.45, pl.psAdd) - (f.ratingIdx >= 5 ? 0.15 * (f.ratingIdx - 4) : 0);
     f.logPS = instant ? lt : f.logPS + (lt - f.logPS) * 0.5;
     const ev = pl.revenue * 4 * Math.exp(f.logPS);
     const equity = Math.max(ev - (f.debt - f.cash), ev * 0.12);
@@ -354,7 +384,9 @@
     const sc = SCEN[s.scenario], f = s.fin;
     const g = (sc.beta * (s.macro.gdp + INFLATION * 100)) / 100;
     f.M *= (1 + g / 4) * s.marketShock;
-    f.volRef *= 1 + INFLATION / 4;
+    // Fixed costs rise with inflation, and step up once volume outgrows them (growth needs
+    // people and systems), but stay sticky when volume falls.
+    f.volRef = Math.max(f.volRef * (1 + INFLATION / 4), volume(s) * 0.8);
     s.marketShock = 1;
     const pl = computePL(s, extra);
     const div = isOn(s, 'dividend') ? Math.max(0, pl.ni) * (0.1 + 0.6 * s.pol.dividend.x) : 0;
@@ -421,7 +453,7 @@
       used.add(q);
     }
     const forcedIds = new Set(out.map((e) => e.id));
-    const pool = shuffle(C.macroEvents.filter((e) => !forcedIds.has(e.id)), r);
+    const pool = shuffle(C.macroEvents.filter((e) => !forcedIds.has(e.id) && inScenario(e, scenario) && !(e.only && sc.forced && sc.forced.some(([f]) => f === e.id))), r);
     const n = length <= 8 ? 3 : 5;
     let picked = 0;
     for (const ev of pool) {
@@ -468,6 +500,11 @@
     if (fx.cash) s.fin.cash += fx.cash * vol;
     if (fx.debt) s.fin.debt += fx.debt * vol * 4;
     if (fx.borrow) { s.fin.debt += fx.borrow * vol * 4; s.fin.cash += fx.borrow * vol * 4; }
+    if (fx.specialDiv) {
+      const amount = Math.min(Math.max(0, s.fin.cash), fx.specialDiv * vol);
+      s.fin.cash -= amount;
+      s.fin.cumDps += amount / s.fin.shares;
+    }
     if (fx.rights) {
       s.fin.cash += fx.rights * s.fin.shares * s.fin.price * 0.8;
       s.fin.shares *= 1 + fx.rights;
@@ -572,6 +609,19 @@
 
   /* -------------------------------------------------------------- game setup */
 
+  // Scenario-specific cases alternate with general ones so every story case shows up.
+  function buildDeck(seed, scenario) {
+    const r = rng(seed, scenario, 'deck');
+    const own = shuffle(defs(scenario).dil.filter((d) => d.only).map((d) => d.id), r);
+    const general = shuffle(defs(scenario).dil.filter((d) => !d.only).map((d) => d.id), r);
+    const deck = [];
+    while (own.length || general.length) {
+      if (own.length) deck.push(own.shift());
+      if (general.length) deck.push(general.shift());
+    }
+    return deck;
+  }
+
   function snapshotPolicies(s) {
     s.polStart = {};
     for (const p of C.policies) s.polStart[p.id] = { on: s.pol[p.id].on, x: s.pol[p.id].x };
@@ -590,7 +640,7 @@
       finHist: [], hist: { vars: [], groups: [], approval: [], macro: [] },
       capital: 12, pending: [], log: [], dilemma: null, rupslbRun: 0, sig: {},
       timeline: buildTimeline(seed, sc.id, length),
-      deck: shuffle(C.dilemmas.map((d) => d.id), rng(seed, sc.id, 'deck')),
+      deck: buildDeck(seed, sc.id),
     };
     for (const p of C.policies) {
       const preset = sc.policies[p.id];
@@ -754,6 +804,7 @@
     RATINGS, SPREAD, SHARE_SCALE, CAPITAL_MAX, TAX,
     VAR, POL, GRP, SIT, SCEN, DIL, MEV,
     newGame, endQuarter, chooseDilemma, setPolicy, revertPolicy, changeCost, capitalSpent, capitalLeft, capitalGain,
+    defs, theory, inScenario, flagOn,
     approval, votes, groupWeight, elasticity, sitScore, sitOn, sitOff, computePL, volume, policyCost, explainVar, explainGroup,
     finalScore, tsr, helpers, src, clamp,
   };

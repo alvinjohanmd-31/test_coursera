@@ -34,6 +34,10 @@ const strategies = {
         ['automation', true, 0.5], ['cvc', false], ['cyber', true, 0.6], ['rnd', true, 0.45], ['ai', true, 0.6]],
       incumbent: [['greenops', true, 0.8], ['rnd', true, 0.6], ['esgreport', true, 0.6], ['netzero', true, 0.4], ['training', true, 0.5],
         ['lobbying', false], ['ethics', true, 0.5], ['ai', true, 0.4], ['buyback', false], ['dividend', true, 0.4]],
+      ai: [['qualityctl', true, 0.6], ['ethics', true, 0.6], ['automation', true, 0.5], ['supplier', true, 0.5], ['outsourcing', false],
+        ['pricing', true, 0.55], ['esgreport', true, 0.4], ['cyber', true, 0.6], ['hybrid', true, 0.5]],
+      palmoil: [['expansion', false], ['safety', true, 0.7], ['esgreport', true, 0.6], ['greenops', true, 0.6], ['supplier', true, 0.6],
+        ['lobbying', false], ['rnd', true, 0.4], ['csr', true, 0.5], ['dividend', true, 0.3], ['ai', true, 0.4]],
     }[s.scenario];
     for (const [id, on, x] of want) {
       const st = s.pol[id];
@@ -50,6 +54,10 @@ const strategies = {
         [3, [['automation', true, 0.4], ['cyber', true, 0.5]]], [5, [['qualityctl', true, 0.4]]]],
       incumbent: [[1, [['rnd', true, 0.4], ['lobbying', false], ['esgreport', true, 0.5], ['buyback', false]]], [2, [['greenops', true, 0.5], ['ethics', true, 0.4]]],
         [3, [['training', true, 0.4], ['ai', true, 0.3]]], [5, [['greenops', true, 0.7], ['rnd', true, 0.55]]]],
+      ai: [[1, [['qualityctl', true, 0.6], ['outsourcing', false], ['ethics', true, 0.5]]], [2, [['automation', true, 0.5], ['supplier', true, 0.4]]],
+        [3, [['esgreport', true, 0.4], ['cyber', true, 0.6]]], [5, [['pricing', true, 0.55], ['advertising', true, 0.3]]]],
+      palmoil: [[1, [['expansion', false], ['safety', true, 0.7], ['esgreport', true, 0.5]]], [2, [['greenops', true, 0.5], ['lobbying', false]]],
+        [3, [['supplier', true, 0.6], ['csr', true, 0.5]]], [5, [['rnd', true, 0.4], ['greenops', true, 0.7]]]],
     }[s.scenario];
     for (const [from, moves] of plan) {
       if (s.t + 1 < from) continue;
