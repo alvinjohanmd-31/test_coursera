@@ -12,6 +12,7 @@
   const index = (list) => Object.fromEntries(list.map((x) => [x.id, x]));
   const VAR = index(C.vars), POL = index(C.policies), GRP = index(C.groups), SIT = index(C.situations);
   const SCEN = index(C.scenarios), DIL = index(C.dilemmas), MEV = index(C.macroEvents);
+  const TRAIT = index(C.traits), PRJ = index(C.projects), ROLE = Object.fromEntries(C.roles.map((r) => [r.dept, r]));
 
   const RATINGS = ['AAA', 'AA', 'A', 'BBB', 'BB', 'B', 'CCC'];
   const SPREAD = [0.5, 0.8, 1.2, 1.8, 2.8, 4.2, 6.5]; // percentage points over BI-Rate
@@ -20,6 +21,7 @@
   const CAPITAL_MAX = 30;
   const MACRO_BASE = { gdp: 5.0, bi: 6.0, input: 1.0, fx: 16000 };
   const INFLATION = 0.03;
+  const HIRE_CAP = 4, VACANT_CAP = 2, SEVERANCE = 0.004, MAX_PROJECTS = 2;
 
   const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
   const cen = (x) => 2 * x - 1;
@@ -111,6 +113,7 @@
       const k = id[0], key = id.slice(2);
       if (k === 'f') return s.sig[key];
       if (k === 'g') return s.groups[key].h;
+      if (k === 't') return teamAvg(s, key);
     }
     if (id.startsWith('flag:')) return flagOn(s, id.slice(5)) ? 1 : 0;
     if (VAR[id]) return s.vars[id];
@@ -139,7 +142,7 @@
     for (const p of defs(s.scenario).pol) {
       const e = s.pol[p.id].eff;
       if (p.kind !== 'bipolar' && e < 1e-3) continue;
-      const m = polMag(p, e);
+      const m = polMag(p, e) * deptFactor(s, p.dept);
       for (const [vid, c] of p.fx) add(vid, c * m * (p.id === 'pricing' && vid === 'share' ? elasticity(s) : 1), 'pol', p.id);
     }
     for (const v of C.vars) for (const [vid, c] of v.fx || []) add(vid, c * cen(s.vars[v.id]), 'var', v.id);
@@ -182,6 +185,8 @@
     if (s.flags.carbonTax) add('regulators', 0.06 * cen(s.vars.sustainability), 'flag', 'carbonTax');
     if (s.flags.aiRule) add('regulators', 0.10 * cen(s.vars.compliance) + 0.05 * cen(polEff(s, 'qualityctl')), 'flag', 'aiRule');
     if (s.flags.eudr) add('customers', 0.08 * cen(s.vars.sustainability), 'flag', 'eudr');
+    // Rules and trends in force can make a group judge you on a new input.
+    for (const ev of C.macroEvents) if (ev.judge && flagOn(s, ev.id)) for (const [gid, sid, c] of ev.judge) add(gid, c * cen(src(s, sid)), 'flag', ev.id);
     for (const p of defs(s.scenario).pol) {
       const e = s.pol[p.id].eff;
       if (p.kind !== 'bipolar' && e < 1e-3) continue;
@@ -204,7 +209,7 @@
 
   // Influence shifts with conditions, like voter-group membership in Democracy.
   function groupWeight(s, id) {
-    const g = GRP[id];
+    const g = defs(s.scenario).GRP[id];
     let w = g.w;
     if (id === 'activists') w *= (1 + 1.2 * Math.max(0, 0.45 - s.vars.sustainability) / 0.45) * (s.flags.carbonTax ? 1.5 : 1);
     if (id === 'union') w *= 1 + Math.max(0, 0.45 - s.vars.morale) / 0.45;
@@ -271,6 +276,7 @@
     const a = { revMult: s.finMods.revMult, cogsAdd: s.finMods.cogsAdd, opexAdd: s.finMods.opexAdd, psAdd: 0, interestAdd: 0, cost: 0 };
     for (const si of C.situations) if (s.sit[si.id].on && si.fin) for (const k in si.fin) a[k] += si.fin[k];
     for (const m of s.mods) if (m.k === 'f') a[m.id] = (a[m.id] || 0) + m.v;
+    for (const pr of (s.projects && s.projects.active) || []) { const d = PRJ[pr.id].during; if (d) for (const k in d) a[k] += d[k]; }
     return a;
   }
 
@@ -454,7 +460,7 @@
     }
     const forcedIds = new Set(out.map((e) => e.id));
     const pool = shuffle(C.macroEvents.filter((e) => !forcedIds.has(e.id) && inScenario(e, scenario) && !(e.only && sc.forced && sc.forced.some(([f]) => f === e.id))), r);
-    const n = length <= 8 ? 3 : 5;
+    const n = Math.max(3, Math.round(length * 0.4));
     let picked = 0;
     for (const ev of pool) {
       if (picked >= n) break;
@@ -509,7 +515,19 @@
       s.fin.cash += fx.rights * s.fin.shares * s.fin.price * 0.8;
       s.fin.shares *= 1 + fx.rights;
     }
+    if (fx.dilute) s.fin.shares *= 1 + fx.dilute; // new shares granted without cash
     if (fx.cap) s.capital = clamp(s.capital + fx.cap, 0, CAPITAL_MAX);
+    for (const [dept, d] of fx.loy || []) if (s.team[dept] && !s.team[dept].vacant) s.team[dept].loy = clamp(s.team[dept].loy + d, 0.02, 0.98);
+    for (const [dept, d] of fx.comp || []) if (s.team[dept] && !s.team[dept].vacant) s.team[dept].comp = clamp(s.team[dept].comp + d, 0.1, 0.95);
+    if (fx.dir) appoint(s, fx.dir.dept, { ...fx.dir, name: fx.dir.name || freeName(s, rng(s.seed, s.scenario, 'dirfx', srcId)) }, srcId);
+    if (fx.proj) {
+      const a = s.projects.active.slice().sort((x, y) => y.paid - x.paid)[0];
+      if (a) {
+        if (fx.proj === 'overrun') a.mult += 0.4;
+        if (fx.proj === 'boost') { a.prog = Math.min(0.98, a.prog + 0.2); a.mult += 0.2; }
+        if (fx.proj === 'cancel') cancelProject(s, a.id);
+      }
+    }
     if (fx.risk) {
       s.pending.push({ due: s.t + fx.risk.delay, src: srcId, chance: fx.risk.chance, mit: fx.risk.mit || [], text: fx.risk.text, fx: fx.risk.fx });
     }
@@ -544,6 +562,183 @@
     }
   }
 
+  /* ------------------------------------------------------- leadership team */
+
+  // One director per department, like cabinet ministers in Democracy 3. Competence scales
+  // the KPI effects of the department's policies; loyalty follows each director's agenda.
+  const round2 = (x) => Math.round(x * 100) / 100;
+  function freeName(s, r) {
+    const taken = new Set(Object.values(s.team || {}).map((d) => d.name));
+    const pool = C.names.filter((n) => !taken.has(n));
+    return pool[Math.floor(r() * pool.length)] || C.names[0];
+  }
+  function buildTeam(seed, scenario) {
+    const r = rng(seed, scenario, 'team');
+    const names = shuffle(C.names, r);
+    const depts = C.departments.map((d) => d.id);
+    // Every inherited team has one weak link and one restless director.
+    const weak = depts[Math.floor(r() * depts.length)];
+    let shaky = depts[Math.floor(r() * depts.length)];
+    if (shaky === weak) shaky = depts[(depts.indexOf(weak) + 3) % depts.length];
+    const team = {};
+    depts.forEach((d, i) => {
+      const traits = C.traits.filter((x) => x.dept === d);
+      team[d] = {
+        name: names[i], trait: traits[Math.floor(r() * traits.length)].id,
+        comp: round2(d === weak ? 0.3 + 0.08 * r() : 0.45 + 0.3 * r()),
+        loy: round2(d === shaky ? 0.32 + 0.06 * r() : 0.55 + 0.15 * r()),
+        since: -8, low: 0, vacant: false, hires: 0,
+      };
+    });
+    return team;
+  }
+  // Effective competence: new hires need about two quarters to reach full strength.
+  function dirComp(s, dept) {
+    const d = s.team && s.team[dept];
+    if (!d) return 0.5;
+    if (d.vacant) return 0.25;
+    return d.comp * Math.min(1, 0.6 + 0.2 * Math.max(0, s.t - d.since));
+  }
+  const deptFactor = (s, dept) => 0.75 + 0.5 * dirComp(s, dept);
+  function teamAvg(s, key) {
+    const list = Object.keys(s.team || {}).filter((d) => !s.team[d].vacant);
+    if (!list.length) return 0;
+    return list.reduce((a, d) => a + (key === 'comp' ? dirComp(s, d) : s.team[d].loy), 0) / list.length;
+  }
+  function polLevel(s, id) {
+    const p = POL[id], st = s.pol[id];
+    if (!p || !st) return 0;
+    return p.kind === 'bipolar' ? cen(st.x) : st.on ? st.x : 0;
+  }
+  // Where a director's loyalty is heading, with the reasons (for the team panel).
+  function loyaltyTarget(s, dept, explain) {
+    const d = s.team[dept], tr = TRAIT[d.trait], parts = [];
+    const add = (kind, ref, val) => { if (Math.abs(val) > 5e-4) parts.push({ kind, ref, val }); return val; };
+    let v = 0.5;
+    v += add('approval', null, 0.3 * (approval(s) - 0.5));
+    v += add('pol', 'execpay', 0.1 * cen(s.pol.execpay.x));
+    for (const [id, w] of tr.likes) v += add('pol', id, w * polLevel(s, id));
+    for (const [id, w] of tr.dislikes) v += add('pol', id, -w * polLevel(s, id));
+    v = clamp(v, 0.05, 0.95);
+    return explain ? { target: v, parts } : v;
+  }
+  function stepTeam(s, rep, budgetMove) {
+    let leaks = 0;
+    for (const dept of Object.keys(s.team)) {
+      const d = s.team[dept];
+      if (d.vacant) continue;
+      // Directors notice when their spending policies are cut or expanded this quarter.
+      const mv = budgetMove[dept] || 0;
+      const bump = mv < -0.25 ? -0.06 : mv > 0.25 ? 0.03 : 0;
+      d.loy = round2(clamp(d.loy + (loyaltyTarget(s, dept) - d.loy) * 0.3 + bump, 0.02, 0.98));
+      d.low = d.loy < 0.25 ? d.low + 1 : 0;
+      const roll = rng(s.seed, s.scenario, 'team', dept, s.t)();
+      if (d.low >= 2 && roll < 0.6) {
+        rep.news.push({ type: 'dirResign', dept, name: d.name });
+        s.log.push({ t: s.t, type: 'resign', dept, name: d.name });
+        s.team[dept] = { ...d, vacant: true, left: d.name };
+        s.mods.push({ k: 'g', id: 'board', v: -0.05, n: 2, src: 'resign' }, { k: 'v', id: 'morale', v: -0.03, n: 2, src: 'resign' });
+      } else if (d.loy < 0.32 && roll < 0.3 && !leaks) {
+        leaks++;
+        rep.news.push({ type: 'dirLeak', dept, name: d.name });
+        s.mods.push({ k: 'g', id: 'board', v: -0.05, n: 2, src: 'leak' });
+      }
+    }
+  }
+  // Three candidates per vacancy: stronger ones cost more to sign.
+  function candidates(s, dept) {
+    const d = s.team[dept];
+    const r = rng(s.seed, s.scenario, 'cand', dept, s.t, d.hires || 0);
+    const taken = new Set(Object.values(s.team).map((x) => x.name));
+    const names = shuffle(C.names.filter((n) => !taken.has(n)), r);
+    const traits = shuffle(C.traits.filter((x) => x.dept === dept), r);
+    return [0, 1, 2].map((i) => ({
+      name: names[i], trait: traits[i % traits.length].id,
+      comp: round2([0.48 + 0.12 * r(), 0.6 + 0.12 * r(), 0.72 + 0.14 * r()][i]),
+      fee: [0.003, 0.006, 0.01][i],
+    }));
+  }
+  const hireCost = (s, dept) => (s.team[dept].vacant ? VACANT_CAP : HIRE_CAP);
+  function appoint(s, dept, c, why) {
+    const old = s.team[dept];
+    s.team[dept] = { name: c.name, trait: c.trait || old.trait, comp: c.comp ?? 0.5, loy: c.loy ?? 0.7, since: s.t + 1, low: 0, vacant: false, hires: (old.hires || 0) + 1, hiredQ: s.t };
+    s.log.push({ t: s.t + 1, type: 'hire', dept, name: c.name, prev: old.vacant ? null : old.name, why: why || null });
+  }
+  // Player action: replace (or fill) a director seat. Returns false if not allowed.
+  function hireDirector(s, dept, idx) {
+    const d = s.team[dept];
+    if (!d || d.hiredQ === s.t || s.status !== 'playing') return false;
+    const cost = hireCost(s, dept);
+    if (capitalLeft(s) < cost) return false;
+    const c = candidates(s, dept)[idx];
+    if (!c) return false;
+    const vol = volume(s);
+    s.qSpend += cost;
+    s.qExtra += c.fee * vol + (d.vacant ? 0 : SEVERANCE * vol);
+    // The board judges the swap by who leaves.
+    if (!d.vacant && d.comp >= 0.65) s.mods.push({ k: 'g', id: 'board', v: -0.04, n: 2, src: 'fireGood' });
+    if (!d.vacant && d.comp < 0.45) s.mods.push({ k: 'g', id: 'board', v: 0.03, n: 2, src: 'fireWeak' });
+    appoint(s, dept, c);
+    return true;
+  }
+
+  /* ------------------------------------------------------ strategic projects */
+
+  const projectList = (s) => C.projects.filter((p) => inScenario(p, s.scenario));
+  function canStart(s, id) {
+    const p = PRJ[id], P = s.projects;
+    if (!p || s.status !== 'playing') return false;
+    if (P.active.length >= MAX_PROJECTS || P.active.some((a) => a.id === id) || P.done.includes(id)) return false;
+    return capitalLeft(s) >= p.cap;
+  }
+  function startProject(s, id) {
+    if (!canStart(s, id)) return false;
+    s.qSpend += PRJ[id].cap;
+    s.projects.active.push({ id, prog: 0, paid: 0, base: volume(s), mult: 1, q0: s.t });
+    return true;
+  }
+  // Stopping a project loses what was paid (a sunk cost). Undoing it in the same quarter is free.
+  function cancelProject(s, id) {
+    const P = s.projects, i = P.active.findIndex((a) => a.id === id);
+    if (i < 0) return false;
+    const a = P.active[i];
+    P.active.splice(i, 1);
+    if (a.q0 === s.t && a.paid === 0) { s.qSpend -= PRJ[id].cap; return true; }
+    P.cancelled.push(id);
+    if (a.prog > 0.5) s.mods.push({ k: 'g', id: 'board', v: -0.03, n: 2, src: 'cancel' });
+    s.log.push({ t: s.t + 1, type: 'projCancel', id, paid: a.paid });
+    return true;
+  }
+  const projInstallment = (a) => (PRJ[a.id].cost * a.base / PRJ[a.id].dur) * a.mult;
+  function stepProjects(s, rep) {
+    let capex = 0;
+    for (const a of s.projects.active.slice()) {
+      const p = PRJ[a.id];
+      const inst = projInstallment(a);
+      capex += inst;
+      a.paid += inst;
+      const comp = dirComp(s, p.dept);
+      a.prog += (0.7 + 0.6 * comp) / p.dur;
+      const r = rng(s.seed, s.scenario, 'proj', a.id, s.t);
+      if (a.prog < 0.999 && r() < p.risk * (1.4 - comp)) {
+        if (r() < 0.5) { a.mult += 0.25; rep.news.push({ type: 'projOverrun', id: a.id }); }
+        else { a.prog = Math.max(0, a.prog - 0.6 / p.dur); rep.news.push({ type: 'projDelay', id: a.id }); }
+      }
+      if (a.prog < 0.999) continue;
+      if (p.gate && !p.gate(s, helpers(s))) {
+        a.prog = 1 - 0.5 / p.dur;
+        rep.news.push({ type: 'projGate', id: a.id });
+        continue;
+      }
+      s.projects.active.splice(s.projects.active.indexOf(a), 1);
+      s.projects.done.push(a.id);
+      applyFx(s, p.fx, a.id);
+      rep.news.push({ type: 'projDone', id: a.id });
+      s.log.push({ t: s.t, type: 'projDone', id: a.id, paid: a.paid });
+    }
+    return capex;
+  }
+
   /* -------------------------------------------------------- executive capital */
 
   function changeCost(s, id, on = s.pol[id].on, x = s.pol[id].x) {
@@ -557,7 +752,8 @@
     }
     return 0;
   }
-  const capitalSpent = (s) => C.policies.reduce((a, p) => a + changeCost(s, p.id), 0);
+  // Policy changes can be undone until the quarter ends; hires and new projects cannot.
+  const capitalSpent = (s) => C.policies.reduce((a, p) => a + changeCost(s, p.id), 0) + (s.qSpend || 0);
   const capitalLeft = (s) => s.capital - capitalSpent(s);
 
   // Player action: returns false (and changes nothing) if capital is short.
@@ -580,6 +776,9 @@
     const ex = s.pol.execpay.x;
     let gain = 3 + Math.round(approval(s) * 6) + (ex >= 0.85 ? 2 : ex >= 0.6 ? 1 : ex <= 0.2 ? -1 : 0);
     for (const si of C.situations) if (s.sit[si.id].on) gain += si.cap || 0;
+    // A loyal team carries change for you; empty seats slow everything down.
+    const loy = teamAvg(s, 'loy');
+    gain += (loy > 0.65 ? 1 : loy < 0.35 ? -1 : 0) - Object.values(s.team).filter((d) => d.vacant).length;
     return Math.max(1, gain);
   }
 
@@ -632,15 +831,17 @@
     const length = opts.length || 12;
     const seed = String(opts.seed || 'MBA').trim().toUpperCase() || 'MBA';
     const s = {
-      v: 1, scenario: sc.id, seed, length, t: 0, year0: opts.year0 || 2027, status: 'playing', endReason: null,
+      v: 2, scenario: sc.id, seed, length, t: 0, year0: opts.year0 || 2027, status: 'playing', endReason: null,
       vars: {}, pol: {}, polStart: {}, groups: {}, sit: {}, mods: [], baseAdj: { ...sc.baseAdj },
       finMods: { revMult: 0, cogsAdd: 0, opexAdd: 0 }, flags: {}, marketShock: 1, compBase: sc.compBase,
       macro: { gdp: MACRO_BASE.gdp, bi: MACRO_BASE.bi, input: MACRO_BASE.input, fx: MACRO_BASE.fx, comp: sc.compBase },
       fin: { M: sc.M, cash: sc.cash, debt: sc.debt, shares: sc.shares, shares0: sc.shares, cumDps: 0, ratingIdx: 3, logPS: Math.log(sc.ps), price: 0 },
-      finHist: [], hist: { vars: [], groups: [], approval: [], macro: [] },
-      capital: 12, pending: [], log: [], dilemma: null, rupslbRun: 0, sig: {},
+      finHist: [], hist: { vars: [], groups: [], approval: [], macro: [], team: [] },
+      capital: 12, qSpend: 0, qExtra: 0, pending: [], log: [], dilemma: null, rupslbRun: 0, sig: {},
       timeline: buildTimeline(seed, sc.id, length),
       deck: buildDeck(seed, sc.id),
+      team: buildTeam(seed, sc.id),
+      projects: { active: [], done: [], cancelled: [] },
     };
     for (const p of C.policies) {
       const preset = sc.policies[p.id];
@@ -683,6 +884,18 @@
     s.hist.groups.push(Object.fromEntries(C.groups.map((g) => [g.id, s.groups[g.id].h])));
     s.hist.approval.push(approval(s));
     s.hist.macro.push({ ...s.macro });
+    s.hist.team.push(Object.fromEntries(Object.entries(s.team).map(([d, x]) => [d, x.vacant ? null : x.loy])));
+  }
+
+  // Saves from before the leadership team and projects existed.
+  function migrate(s) {
+    if (!s.team) s.team = buildTeam(s.seed, s.scenario);
+    if (!s.projects) s.projects = { active: [], done: [], cancelled: [] };
+    if (!s.hist.team) s.hist.team = [];
+    s.qSpend = s.qSpend || 0;
+    s.qExtra = s.qExtra || 0;
+    s.v = 2;
+    return s;
   }
 
   /* --------------------------------------------------------------- the turn */
@@ -696,17 +909,22 @@
     const spent = capitalSpent(s);
     const changes = [];
     const vol0 = volume(s);
-    let severance = 0, capex = 0;
+    let severance = s.qExtra || 0, capex = 0;
+    const budgetMove = {};
     for (const p of C.policies) {
       const a = s.polStart[p.id], b = s.pol[p.id];
       if (a.on !== b.on || Math.abs(a.x - b.x) > 1e-3) changes.push({ id: p.id, from: a.on ? a.x : null, to: b.on ? b.x : null });
       const d = (b.on ? b.x : 0) - (a.on ? a.x : 0);
+      if (p.cost > 0 && p.kind !== 'bipolar') budgetMove[p.dept] = (budgetMove[p.dept] || 0) + d;
       if (d > 0) {
         if (p.id === 'layoffs') severance += 0.06 * vol0 * d;
         if (p.capex) capex += p.capex * vol0 * d;
       }
     }
+    for (const a of s.projects.active) if (a.q0 === s.t) s.log.push({ t: s.t + 1, type: 'projStart', id: a.id });
     s.capital -= spent;
+    s.qSpend = 0;
+    s.qExtra = 0;
     if (changes.length) s.log.push({ t: s.t + 1, type: 'policy', changes });
     rep.spent = spent;
     rep.changes = changes;
@@ -719,10 +937,13 @@
       if (!st.on && st.eff < 0.01) st.eff = 0;
     }
     stepVars(s);
-    stepFinance(s, rep, severance, capex);
+    const projCapex = stepProjects(s, rep);
+    stepFinance(s, rep, severance, capex + projCapex);
     rep.severance = severance;
+    rep.projCapex = projCapex;
     computeSignals(s);
     stepGroups(s);
+    stepTeam(s, rep, budgetMove);
     stepSituations(s, rep);
     resolvePending(s, rep);
     rollRiskEvents(s, rep);
@@ -804,7 +1025,10 @@
     RATINGS, SPREAD, SHARE_SCALE, CAPITAL_MAX, TAX,
     VAR, POL, GRP, SIT, SCEN, DIL, MEV,
     newGame, endQuarter, chooseDilemma, setPolicy, revertPolicy, changeCost, capitalSpent, capitalLeft, capitalGain,
-    defs, theory, inScenario, flagOn,
+    defs, theory, inScenario, flagOn, migrate,
+    TRAIT, PRJ, ROLE, HIRE_CAP, VACANT_CAP, SEVERANCE, MAX_PROJECTS,
+    dirComp, deptFactor, teamAvg, loyaltyTarget, candidates, hireCost, hireDirector,
+    projectList, canStart, startProject, cancelProject, projInstallment,
     approval, votes, groupWeight, elasticity, sitScore, sitOn, sitOff, computePL, volume, policyCost, explainVar, explainGroup,
     finalScore, tsr, helpers, src, clamp,
   };

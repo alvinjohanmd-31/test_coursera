@@ -6,7 +6,9 @@
 (function () {
   'use strict';
   const C = window.CEO_CONTENT, E = window.CEO_ENGINE;
-  const SAVE_KEY = 'ceoMandate.save.v1';
+  const LEGACY_SAVE_KEY = 'ceoMandate.save.v1';
+  const SLOT_KEY = (n) => `ceoMandate.slot.${n}`;
+  const SLOTS = [1, 2, 3];
   const PREF_KEY = 'ceoMandate.prefs.v1';
   const DEPT = Object.fromEntries(C.departments.map((d) => [d.id, d]));
   const PERSP = Object.fromEntries(C.perspectives.map((p) => [p.id, p]));
@@ -53,9 +55,9 @@
 
   let S = null; // game state (engine)
   const U = {
-    lang: 'id', scenario: 'turnaround', seed: 'MBA-2027', length: 12,
+    lang: 'id', scenario: 'turnaround', seed: 'MBA-2027', length: 20, slot: 1,
     mainTab: 'map', railTab: 'stake', modal: null, stack: [], queue: [], lastReport: null,
-    hover: null, saved: null, busy: false,
+    hover: null, slots: [null, null, null], busy: false,
   };
 
   /* ------------------------------------------------------------- strings */
@@ -64,14 +66,16 @@
     tagline: ['Simulasi strategi untuk kelas MBA', 'A strategy simulation for MBA classes'],
     heroA: ['Anda Direktur Utama.', 'You are the CEO.'],
     heroB: ['Semua orang punya kepentingan.', 'Everyone has a stake.'],
-    lede: ['Atur 35 kebijakan strategis, hadapi krisis dan kasus dilema, lalu pertahankan kepercayaan Dewan Komisaris di setiap RUPS tahunan. Setiap keputusan menyenangkan sebagian pemangku kepentingan dan mengecewakan yang lain.',
-      'Set 35 strategic policies, face crises and case dilemmas, and keep the board’s confidence at every annual shareholders’ meeting. Every decision pleases some stakeholders and disappoints others.'],
+    lede: ['Atur 35 kebijakan strategis, pimpin tim direksi, jalankan proyek besar, hadapi krisis dan kasus dilema, lalu pertahankan kepercayaan Dewan Komisaris di setiap RUPS tahunan selama masa jabatan hingga 5 tahun. Setiap keputusan menyenangkan sebagian pemangku kepentingan dan mengecewakan yang lain.',
+      'Set 35 strategic policies, lead a leadership team, run big projects, face crises and case dilemmas, and keep the board’s confidence at every annual shareholders’ meeting over a term of up to 5 years. Every decision pleases some stakeholders and disappoints others.'],
     mapPolicies: ['Kebijakan', 'Policies'], mapPoliciesD: ['Slider strategis di 6 departemen', 'Strategic sliders in 6 departments'],
     mapCapital: ['Modal Eksekutif', 'Executive Capital'], mapCapitalD: ['Batas perubahan per kuartal', 'Your budget for change each quarter'],
     mapStake: ['Pemangku kepentingan', 'Stakeholders'], mapStakeD: ['10 kelompok dengan bobot suara', '10 groups with weighted votes'],
     mapRups: ['RUPS tahunan', 'Annual meeting'], mapRupsD: ['Di bawah 50%, Anda dicopot', 'Below 50%, you are dismissed'],
     mapSit: ['Krisis & peluang', 'Crises & opportunities'], mapSitD: ['Muncul saat indikator melewati ambang', 'Appear when indicators cross a threshold'],
-    mapCase: ['Kasus dilema', 'Case dilemmas'], mapCaseD: ['21 kasus berbasis teori bisnis', '21 cases grounded in business theory'],
+    mapCase: ['Kasus dilema', 'Case dilemmas'], mapCaseD: ['{0} kasus berbasis teori bisnis', '{0} cases grounded in business theory'],
+    mapTeam: ['Tim Direksi', 'Leadership team'], mapTeamD: ['6 direktur dengan kompetensi & loyalitas', '6 directors with competence & loyalty'],
+    mapProj: ['Proyek strategis', 'Strategic projects'], mapProjD: ['Investasi multi-kuartal yang bisa molor', 'Multi-quarter bets that can overrun'],
     chooseScenario: ['Pilih perusahaan', 'Choose your company'],
     difficulty: ['Tingkat kesulitan', 'Difficulty'],
     revenueQ: ['Pendapatan per kuartal', 'Revenue per quarter'], rating: ['Peringkat', 'Rating'], marketShare: ['Pangsa pasar', 'Market share'],
@@ -206,13 +210,16 @@
     helpS5: ['Krisis (merah) dan peluang (hijau) muncul di pusat peta. Tab Indikator & risiko menunjukkan seberapa dekat setiap situasi dengan pemicunya.', 'Crises (red) and opportunities (green) appear in the center. The Indicators & risks tab shows how close each one is to triggering.'],
     helpS6: ['Setelah tiap kuartal Anda menerima laporan dan satu kasus dilema. Di setiap akhir tahun ada RUPS. Bila Dewan Komisaris dan pemegang saham sangat kecewa dua kuartal berturut-turut, RUPS Luar Biasa bisa mencopot Anda kapan saja.', 'After every quarter you get a report and one case dilemma. Each year ends with an AGM. If the board and shareholders stay furious for two quarters, an extraordinary meeting can remove you at any time.'],
     helpS7: ['Kas di bawah nol memicu pinjaman darurat. Bila peringkat sudah CCC, bank menolak dan perusahaan masuk PKPU: permainan berakhir.', 'Negative cash triggers emergency borrowing. If the rating is already CCC, banks refuse and the company enters debt restructuring: game over.'],
+    helpS8: ['Tab Direksi: enam direktur menentukan seberapa efektif kebijakan departemennya. Ganti direktur yang lemah atau tidak loyal, tetapi ingat biayanya dan reaksi dewan.', 'Leadership tab: six directors decide how effective their department’s policies are. Replace weak or disloyal ones, but mind the cost and the board’s reaction.'],
+    helpS9: ['Tab Proyek: investasi besar multi-kuartal dengan manfaat permanen. Pilih waktunya dengan cermat, karena kas keluar sebelum manfaat datang.', 'Projects tab: big multi-quarter investments with permanent benefits. Time them carefully, because cash goes out before the benefits arrive.'],
     helpMapping: ['Untuk pemain Democracy 3', 'For Democracy 3 players'],
     helpTerm: ['Istilah', 'Term'], helpHere: ['Di game ini', 'In this game'],
     dPolicy: ['Kebijakan pemerintah', 'Government policies'], dCapital: ['Political capital', 'Political capital'], dVoters: ['Kelompok pemilih', 'Voter groups'],
     dElection: ['Pemilu', 'Election'], dSituations: ['Situations', 'Situations'], dDilemmas: ['Dilemmas', 'Dilemmas'], dBudget: ['Anggaran, utang, credit rating', 'Budget, debt, credit rating'], dAssassin: ['Pembunuhan politik', 'Assassination'],
     hPolicy: ['35 kebijakan strategis di 6 departemen', '35 strategic policies across 6 departments'], hCapital: ['Modal Eksekutif', 'Executive Capital'],
     hVoters: ['10 pemangku kepentingan dengan bobot suara dinamis', '10 stakeholders with shifting vote weights'], hElection: ['RUPS tahunan (ambang 50%)', 'Annual AGM (50% threshold)'],
-    hSituations: ['17 krisis & peluang', '17 crises & opportunities'], hDilemmas: ['21 kasus dilema MBA', '21 MBA case dilemmas'], hBudget: ['Laporan laba rugi, kas, utang, peringkat kredit', 'Income statement, cash, debt, credit rating'], hAssassin: ['RUPS Luar Biasa', 'Extraordinary general meeting'],
+    hSituations: ['{0} krisis & peluang', '{0} crises & opportunities'], hDilemmas: ['{0} kasus dilema MBA', '{0} MBA case dilemmas'],
+    dCabinet: ['Kabinet & menteri', 'Cabinet ministers'], hCabinet: ['Tim Direksi: 6 direktur dengan kompetensi, loyalitas, dan agenda', 'Leadership team: 6 directors with competence, loyalty and agendas'], hBudget: ['Laporan laba rugi, kas, utang, peringkat kredit', 'Income statement, cash, debt, credit rating'], hAssassin: ['RUPS Luar Biasa', 'Extraordinary general meeting'],
     keys: ['Pintasan: Esc menutup jendela. Tab dan Enter bekerja di peta.', 'Shortcuts: Esc closes a dialog. Tab and Enter work on the map.'],
     regimeNames: ['', ''],
     continueGame: ['Lanjutkan', 'Continue'],
@@ -232,6 +239,58 @@
     theoryHelp: ['Kamus teori bisnis', 'Business theory glossary'],
     theoryHelpD: ['Teori yang menjelaskan hubungan sebab-akibat penting di peta strategi. Teori yang sama juga muncul saat Anda mengarahkan kursor ke node dan di setiap jendela detail.', 'The theories behind the key cause-and-effect links on the strategy map. They also appear when you hover a node and in every detail dialog.'],
     whyLinked: ['Mengapa terhubung?', 'Why are these linked?'], link: ['Hubungan', 'Link'], theory: ['Teori', 'Theory'],
+    tabProjects: ['Proyek', 'Projects'], tabTeam: ['Direksi', 'Leadership'],
+    q20: ['5 tahun · 20 kuartal', '5 years · 20 quarters'], termNote: ['Masa jabatan penuh direksi Tbk adalah 5 tahun. Pilih 2 tahun untuk sesi kelas singkat.', 'A full term for a listed company’s directors is 5 years. Pick 2 years for a short class session.'],
+    slotsTitle: ['Slot simpan', 'Save slots'], slotN: ['Slot {0}', 'Slot {0}'], slotEmpty: ['Kosong', 'Empty'],
+    slotEmptyD: ['Permainan baru bisa disimpan di sini.', 'A new game can be saved here.'],
+    slotPick: ['Pilih slot ini', 'Use this slot'], slotPicked: ['Slot terpilih', 'Selected'],
+    slotResume: ['Lanjutkan', 'Resume'], slotDelete: ['Hapus', 'Delete'],
+    slotsHelp: ['Simpan hingga tiga permainan di perangkat ini, misalnya satu per skenario atau per kelas. Progres tersimpan otomatis setiap kuartal.', 'Keep up to three games on this device, for example one per scenario or per class. Progress saves automatically every quarter.'],
+    startIn: ['Mulai di Slot {0}', 'Start in Slot {0}'],
+    confirmOverwrite: ['Timpa Slot {0}?', 'Overwrite Slot {0}?'], confirmOverwriteD: ['Permainan {0} di slot ini akan diganti dengan permainan baru.', 'The {0} game in this slot will be replaced by a new game.'], yesOverwrite: ['Ya, timpa', 'Yes, overwrite'],
+    confirmDelete: ['Hapus Slot {0}?', 'Delete Slot {0}?'], confirmDeleteD: ['Permainan {0} akan dihapus permanen dari perangkat ini.', 'The {0} game will be permanently deleted from this device.'], yesDelete: ['Ya, hapus', 'Yes, delete'],
+    toMenu: ['Menu utama', 'Main menu'], confirmMenu: ['Kembali ke menu utama?', 'Back to the main menu?'],
+    confirmMenuD: ['Progres Anda sudah tersimpan otomatis di Slot {0}. Anda bisa melanjutkannya kapan saja dari menu utama.', 'Your progress is saved automatically in Slot {0}. You can resume it any time from the main menu.'],
+    savedIn: ['Tersimpan otomatis di Slot {0}', 'Saved automatically in Slot {0}'], finishedGrade: ['selesai · nilai {0}', 'finished · grade {0}'],
+    teamTitle: ['Tim Direksi', 'Leadership Team'],
+    teamIntro: ['Setiap direktur memimpin satu departemen, seperti menteri di kabinet. Kompetensinya memperbesar atau memperkecil efek kebijakan departemen itu (×0,75 sampai ×1,25). Loyalitas bergerak mengikuti agenda pribadinya, kepercayaan dewan, dan remunerasi direksi. Direktur yang tidak loyal membocorkan rapat ke komisaris, dan bisa mundur.', 'Each director leads one department, like a cabinet minister. Their competence scales that department’s policy effects (×0.75 to ×1.25). Loyalty follows their personal agenda, board confidence and executive pay. Disloyal directors leak to the board, and may quit.'],
+    teamTheory: ['Upper echelons theory (Hambrick & Mason, 1984): hasil organisasi mencerminkan nilai dan kemampuan tim puncaknya. Teori keagenan menjelaskan mengapa insentif dan loyalitas direksi harus dikelola.', 'Upper echelons theory (Hambrick & Mason, 1984): organizational outcomes reflect the values and abilities of the top team. Agency theory explains why directors’ incentives and loyalty must be managed.'],
+    avgLoy: ['Loyalitas rata-rata', 'Average loyalty'], avgComp: ['Kompetensi rata-rata', 'Average competence'], vacancies: ['Kursi kosong', 'Vacancies'],
+    capEffect: ['Modal Eksekutif dari tim', 'Executive Capital from the team'], capEffectD: ['+1 bila loyalitas rata-rata di atas 65, −1 bila di bawah 35, −1 per kursi kosong.', '+1 when average loyalty is above 65, −1 below 35, −1 per vacancy.'],
+    competence: ['Kompetensi', 'Competence'], loyalty: ['Loyalitas', 'Loyalty'], agendaLikes: ['Mendukung', 'Supports'], agendaDislikes: ['Menentang', 'Opposes'],
+    deptEffect: ['Efek kebijakan departemen ×{0}', 'Department policy effect ×{0}'], loyHeading: ['Loyalitas menuju {0}', 'Loyalty heading to {0}'],
+    replace: ['Ganti direktur', 'Replace director'], fillSeat: ['Isi kursi', 'Fill the seat'], vacant: ['Kursi kosong', 'Vacant seat'],
+    vacantD: ['{0} mundur. Departemen dijalankan pelaksana tugas dengan efektivitas rendah.', '{0} resigned. An acting head runs the department at low effectiveness.'],
+    newHire: ['Baru menjabat, masih beradaptasi', 'New in the role, still settling in'], hiredThisQ: ['Sudah diganti kuartal ini', 'Already replaced this quarter'],
+    hireTitle: ['Pilih {0} baru', 'Choose a new {0}'],
+    hireIntro: ['Kandidat yang lebih kompeten meminta paket rekrutmen lebih mahal. Direktur baru butuh sekitar dua kuartal untuk mencapai kemampuan penuh. Penggantian tidak bisa dibatalkan.', 'More capable candidates ask for richer packages. A new director needs about two quarters to reach full strength. Appointments cannot be undone.'],
+    signFee: ['Biaya rekrutmen', 'Signing cost'], severanceDir: ['Pesangon direktur lama', 'Outgoing director’s severance'], appoint: ['Angkat', 'Appoint'],
+    boardReactGood: ['Dewan akan mempertanyakan pemecatan direktur yang kompeten.', 'The board will question firing a capable director.'],
+    boardReactWeak: ['Dewan akan menyambut penggantian direktur yang lemah.', 'The board will welcome replacing a weak director.'],
+    hired: ['{0} diangkat sebagai {1}', '{0} appointed as {1}'], current: ['Saat ini', 'Current'], loyBase: ['Nilai dasar', 'Baseline'], whyLoyal: ['Apa yang menggerakkan loyalitasnya', 'What drives their loyalty'],
+    projTitle: ['Proyek Strategis', 'Strategic Projects'],
+    projIntro: ['Proyek berjalan beberapa kuartal. Biayanya dibayar bertahap, manfaat permanennya baru datang saat selesai. Kecepatan bergantung pada kompetensi direktur penanggung jawab, dan setiap kuartal ada risiko terlambat atau membengkak. Maksimal {0} proyek berjalan bersamaan.', 'Projects run for several quarters. You pay in installments and the permanent benefits arrive only on completion. Speed depends on the competence of the director in charge, and every quarter brings a risk of delays or overruns. At most {0} projects can run at once.'],
+    projTheory: ['Capital budgeting: proyek layak bila nilai kini manfaatnya melebihi biayanya. Planning fallacy (Kahneman & Tversky): manajer cenderung meremehkan waktu dan biaya proyek. Sunk cost: biaya yang sudah keluar tidak relevan saat memutuskan lanjut atau berhenti.', 'Capital budgeting: a project is worth it when the present value of its benefits exceeds its cost. The planning fallacy (Kahneman & Tversky): managers underestimate project time and cost. Sunk costs: money already spent is irrelevant when deciding to continue or stop.'],
+    projActive: ['Sedang berjalan', 'In progress'], projAvail: ['Tersedia', 'Available'], projDoneH: ['Selesai', 'Completed'], projCancelled: ['Dihentikan', 'Stopped'],
+    projCost: ['Total biaya', 'Total budget'], projDur: ['Perkiraan durasi', 'Expected duration'], projRisk: ['Risiko per kuartal', 'Risk per quarter'], projCap: ['Modal Eksekutif', 'Executive Capital'],
+    projQ: ['{0} kuartal', '{0} quarters'], projLead: ['Penanggung jawab: {0} {1} · kompetensi {2}', 'Led by {0} {1} · competence {2}'], projGains: ['Manfaat saat selesai', 'Benefits on completion'], projDuring: ['Selama berjalan', 'While it runs'],
+    projStart: ['Mulai proyek', 'Start project'], projStop: ['Hentikan proyek', 'Stop project'], projUndo: ['Batalkan (gratis kuartal ini)', 'Undo (free this quarter)'],
+    projPaid: ['Sudah dibayar', 'Paid so far'], projInst: ['Cicilan per kuartal', 'Installment per quarter'], projProgress: ['Kemajuan', 'Progress'], projLeft: ['± {0} kuartal lagi', '≈ {0} quarters left'],
+    projOverrun: ['Biaya +{0}%', 'Cost +{0}%'], projFull: ['Maksimal {0} proyek berjalan bersamaan', 'At most {0} projects at once'], projStopNote: ['Biaya yang sudah dibayar hangus (sunk cost).', 'What you have paid is lost (a sunk cost).'],
+    projNone: ['Belum ada proyek berjalan.', 'No projects running yet.'], projStartsNow: ['Dimulai kuartal ini', 'Starts this quarter'], projRevenue: ['Pendapatan {0}', 'Revenue {0}'], projUnitCost: ['Biaya per unit {0}', 'Unit cost {0}'],
+    projOpex: ['Beban operasional {0}', 'Operating cost {0}'], projRights: ['Menghimpun modal baru (saham +{0})', 'Raises new equity (shares +{0})'], projSupport: ['Dukungan {0} {1} (sementara)', '{0} support {1} (temporary)'],
+    newsDirResign: ['{0} ({1}) mengundurkan diri. Kursinya kosong sampai Anda mengangkat pengganti.', '{0} ({1}) resigned. The seat stays empty until you appoint a successor.'],
+    newsDirLeak: ['{0} ({1}) membocorkan perbedaan pendapat di direksi kepada komisaris.', '{0} ({1}) leaked boardroom disagreements to the commissioners.'],
+    newsProjDone: ['Proyek selesai: {0}.', 'Project completed: {0}.'], newsProjOverrun: ['Biaya proyek {0} membengkak 25%.', 'Project {0} is 25% over budget.'],
+    newsProjDelay: ['Proyek {0} terlambat dari jadwal.', 'Project {0} slipped behind schedule.'], newsProjGate: ['Proyek {0} belum bisa diselesaikan karena syaratnya belum terpenuhi.', 'Project {0} cannot finish yet: its condition is not met.'],
+    tagTeam: ['Direksi', 'Leadership'], tagProj: ['Proyek', 'Project'],
+    sigTeamLoy: ['Loyalitas rata-rata direksi', 'Average director loyalty'], sigTeamComp: ['Kompetensi rata-rata direksi', 'Average director competence'],
+    srcleak: ['Bocoran dari direksi', 'A boardroom leak'], srcresign: ['Direktur mundur', 'A director resigned'], srcfireGood: ['Memecat direktur kompeten', 'Firing a capable director'],
+    srcfireWeak: ['Mengganti direktur lemah', 'Replacing a weak director'], srccancel: ['Proyek dihentikan', 'A stopped project'],
+    logHire: ['mengangkat {0} sebagai {1}', 'appointed {0} as {1}'], logResign: ['{0} ({1}) mundur', '{0} ({1}) resigned'], logProjStart: ['memulai proyek {0}', 'started the project {0}'],
+    logProjDone: ['proyek {0} selesai', 'completed the project {0}'], logProjCancel: ['menghentikan proyek {0}', 'stopped the project {0}'],
+    directorOf: ['{0}: {1} · efek kebijakan ×{2}', '{0}: {1} · policy effect ×{2}'],
+    sumProjects: ['Proyek selesai', 'Projects completed'], sumHires: ['Direktur diganti', 'Directors replaced'],
   };
   const tr = (k, ...a) => {
     const v = STR[k];
@@ -294,6 +353,9 @@
     if (id === 'honeymoon') return tr('explHoney');
     if (id.startsWith('flag:')) return L(E.MEV[id.slice(5)].name);
     if (id.startsWith('f:')) return tr({ tsr: 'sigTsr', profit: 'sigProfit', growth: 'sigGrowth', rating: 'sigRating', cash: 'sigCash', competition: 'sigComp', inputcost: 'sigInput' }[id.slice(2)]);
+    if (id.startsWith('t:')) return tr(id === 't:comp' ? 'sigTeamComp' : 'sigTeamLoy');
+    if (STR['src' + id]) return tr('src' + id);
+    if (E.PRJ[id]) return L(E.PRJ[id].name);
     if (id.startsWith('g:')) return L(G(id.slice(2)).name);
     const o = V(id) || P(id) || E.SIT[id] || FIN[id] || G(id) || E.DIL[id] || E.MEV[id] || REV[id];
     if (!o) return id;
@@ -304,27 +366,42 @@
   /* --------------------------------------------------------- persistence */
 
   function savePrefs() {
-    try { localStorage.setItem(PREF_KEY, JSON.stringify({ lang: U.lang, scenario: U.scenario, seed: U.seed, length: U.length })); } catch (e) { /* storage unavailable */ }
+    try { localStorage.setItem(PREF_KEY, JSON.stringify({ lang: U.lang, scenario: U.scenario, seed: U.seed, length: U.length, slot: U.slot })); } catch (e) { /* storage unavailable */ }
   }
   function loadPrefs() {
     try {
       const p = JSON.parse(localStorage.getItem(PREF_KEY) || 'null');
-      if (p) Object.assign(U, { lang: p.lang || U.lang, scenario: p.scenario || U.scenario, seed: p.seed || U.seed, length: p.length || U.length });
+      if (p) Object.assign(U, { lang: p.lang || U.lang, scenario: E.SCEN[p.scenario] ? p.scenario : U.scenario, seed: p.seed || U.seed, length: [8, 12, 20].includes(p.length) ? p.length : U.length, slot: SLOTS.includes(p.slot) ? p.slot : U.slot });
     } catch (e) { /* storage unavailable */ }
   }
+  // Three save slots; every quarter autosaves into the slot the game was started in.
   function saveGame() {
     if (!S) return;
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ S, queue: U.queue, lastReport: U.lastReport })); } catch (e) { /* storage unavailable */ }
+    try { localStorage.setItem(SLOT_KEY(U.slot), JSON.stringify({ S, queue: U.queue, lastReport: U.lastReport, at: Date.now() })); } catch (e) { /* storage unavailable */ }
   }
-  function loadSave() {
+  function readSlot(n) {
     try {
-      const d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
-      if (d && d.S && d.S.v === 1 && E.SCEN[d.S.scenario]) return d;
-    } catch (e) { /* storage unavailable */ }
+      const d = JSON.parse(localStorage.getItem(SLOT_KEY(n)) || 'null');
+      if (d && d.S && (d.S.v === 1 || d.S.v === 2) && E.SCEN[d.S.scenario]) { E.migrate(d.S); return d; }
+    } catch (e) { /* storage unavailable or corrupt */ }
     return null;
   }
-  function clearSave() {
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage unavailable */ }
+  // A single save from before slots existed moves into the first free slot.
+  function migrateLegacySave() {
+    try {
+      const raw = localStorage.getItem(LEGACY_SAVE_KEY);
+      if (!raw) return;
+      const free = SLOTS.find((n) => !localStorage.getItem(SLOT_KEY(n)));
+      if (free) localStorage.setItem(SLOT_KEY(free), raw);
+      localStorage.removeItem(LEGACY_SAVE_KEY);
+    } catch (e) { /* storage unavailable */ }
+  }
+  function loadSlots() {
+    migrateLegacySave();
+    U.slots = SLOTS.map(readSlot);
+  }
+  function clearSlot(n) {
+    try { localStorage.removeItem(SLOT_KEY(n)); } catch (e) { /* storage unavailable */ }
   }
 
   /* ---------------------------------------------------------------- start */
@@ -362,12 +439,42 @@
   }
   const statCache = {};
 
+  function slotLabel(d) {
+    const st = d.S, sc = E.SCEN[st.scenario];
+    const done = st.status !== 'playing', q = done ? st.t - 1 : st.t;
+    return `${L(sc.name)} · Q${(q % 4) + 1} ${st.year0 + Math.floor(q / 4)}${done ? ' · ' + tr('finished') : ''}`;
+  }
+  function renderSlots() {
+    return SLOTS.map((n, i) => {
+      const d = U.slots[i], picked = U.slot === n;
+      if (!d) {
+        return `<div class="slot empty ${picked ? 'picked' : ''}">
+          <div class="slot-top"><span class="eyebrow">${tr('slotN', n)}</span></div>
+          <div class="slot-body"><b>${tr('slotEmpty')}</b><span class="muted">${tr('slotEmptyD')}</span></div>
+          <div class="slot-actions"><button class="btn small ${picked ? 'on' : 'ghost'}" data-act="slot" data-id="${n}" aria-pressed="${picked}">${picked ? '✓ ' + tr('slotPicked') : tr('slotPick')}</button></div>
+        </div>`;
+      }
+      const st = d.S, sc = E.SCEN[st.scenario], done = st.status !== 'playing';
+      const q = done ? st.t : st.t + 1;
+      const grade = done ? E.finalScore(st).grade : null;
+      const when = d.at ? new Date(d.at).toLocaleString(U.lang === 'id' ? 'id-ID' : 'en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      return `<div class="slot ${picked ? 'picked' : ''}" style="--tone:var(--d-${sc.tone || 'inn'})">
+        <div class="slot-top"><span class="eyebrow">${tr('slotN', n)}</span><span class="muted mono">${esc(when)}</span></div>
+        <div class="slot-body"><span class="scen-ico">${ico(sc.icon)}</span><div><b>${esc(sc.company)}</b>
+          <span class="muted">${esc(L(sc.name))} · ${done ? tr('finishedGrade', grade) : tr('quarterOf', q, st.length)}</span>
+          <span class="muted mono">${tr('classCode')} ${esc(st.seed)}</span></div></div>
+        <div class="slot-actions"><button class="btn small primary" data-act="resume" data-id="${n}">${tr('slotResume')}</button>
+          <button class="btn small ghost" data-act="slot" data-id="${n}" aria-pressed="${picked}">${picked ? '✓ ' + tr('slotPicked') : tr('slotPick')}</button>
+          <button class="btn small ghost danger-text" data-act="slot-del" data-id="${n}" aria-label="${tr('slotDelete')} ${tr('slotN', n)}">${tr('slotDelete')}</button></div>
+      </div>`;
+    }).join('');
+  }
+
   function renderStart() {
-    const saved = U.saved;
     const cards = C.scenarios.map((sc) => {
       const st = statCache[sc.id] || (statCache[sc.id] = scenarioStats(sc));
       const dots = [1, 2, 3].map((i) => `<i class="${i <= sc.difficulty ? 'on' : ''}"></i>`).join('');
-      const fresh = sc.id === 'ai' || sc.id === 'palmoil';
+      const fresh = sc.id === 'health' || sc.id === 'creator';
       return `<button class="scen" data-act="scenario" data-id="${sc.id}" aria-pressed="${U.scenario === sc.id}" style="--tone:var(--d-${sc.tone || 'inn'})">
         <div class="scen-head"><span class="scen-ico">${ico(sc.icon)}</span><h3>${esc(L(sc.name))}</h3>${fresh ? `<span class="new-tag">${tr('newTag')}</span>` : ''}<span class="dots" title="${tr('difficulty')}" aria-label="${tr('difficulty')} ${sc.difficulty}/3">${dots}</span></div>
         <div><div class="company">${esc(sc.company)}</div><div class="eyebrow">${esc(L(sc.industry))}</div></div>
@@ -379,13 +486,9 @@
         </div>
       </button>`;
     }).join('');
-    const map = [['mapPolicies', 'mapPoliciesD'], ['mapCapital', 'mapCapitalD'], ['mapStake', 'mapStakeD'], ['mapRups', 'mapRupsD'], ['mapSit', 'mapSitD'], ['mapCase', 'mapCaseD']]
-      .map(([a, b]) => `<div><b>${tr(a)}</b><span>${tr(b)}</span></div>`).join('');
-    let resume = '';
-    if (saved) {
-      const done = saved.S.status !== 'playing', q = done ? saved.S.t - 1 : saved.S.t;
-      resume = `<button class="btn" data-act="resume">${tr('resume', esc(`${L(E.SCEN[saved.S.scenario].name)} · Q${(q % 4) + 1} ${saved.S.year0 + Math.floor(q / 4)}${done ? ' · ' + tr('finished') : ''}`))}</button>`;
-    }
+    const map = [['mapPolicies', 'mapPoliciesD'], ['mapCapital', 'mapCapitalD'], ['mapStake', 'mapStakeD'], ['mapRups', 'mapRupsD'], ['mapTeam', 'mapTeamD'], ['mapProj', 'mapProjD'], ['mapSit', 'mapSitD'], ['mapCase', 'mapCaseD']]
+      .map(([a, b]) => `<div><b>${tr(a)}</b><span>${tr(b, C.dilemmas.length)}</span></div>`).join('');
+    const terms = [[8, 'q8'], [12, 'q12'], [20, 'q20']].map(([n, k]) => `<button data-act="length" data-id="${n}" aria-pressed="${U.length === n}">${tr(k)}</button>`).join('');
     return `<div class="start"><div class="start-inner">
       <div class="start-top">
         <div class="wordmark">${logo()}<span>CEO Mandate · ${tr('tagline')}</span></div>
@@ -402,16 +505,19 @@
         ${heroArt()}
       </section>
       <section>
+        <div class="section-title"><h2>${tr('slotsTitle')}</h2><p class="muted">${tr('slotsHelp')}</p></div>
+        <div class="slot-grid">${renderSlots()}</div>
+      </section>
+      <section>
         <div class="section-title"><h2>${tr('chooseScenario')}</h2></div>
         <div class="scen-grid">${cards}</div>
       </section>
       <section class="setup">
         <div class="setup-fields">
           <div class="field"><label for="seed">${tr('classCode')}</label><input id="seed" type="text" maxlength="24" value="${esc(U.seed)}" autocomplete="off" spellcheck="false"><span class="help">${tr('classCodeHelp')}</span></div>
-          <div class="field"><span class="label">${tr('duration')}</span><div class="seg" role="group" aria-label="${tr('duration')}">
-            <button data-act="length" data-id="8" aria-pressed="${U.length === 8}">${tr('q8')}</button><button data-act="length" data-id="12" aria-pressed="${U.length === 12}">${tr('q12')}</button></div></div>
+          <div class="field"><span class="label">${tr('duration')}</span><div class="seg" role="group" aria-label="${tr('duration')}">${terms}</div><span class="help">${tr('termNote')}</span></div>
         </div>
-        <div class="setup-actions">${resume}<button class="btn primary" data-act="start">${tr('startGame')} →</button></div>
+        <div class="setup-actions"><button class="btn primary" data-act="start">${tr('startIn', U.slot)} →</button></div>
       </section>
       <section>
         <div class="section-title"><h2>${tr('howTitle')}</h2></div>
@@ -449,19 +555,21 @@
       <div class="top-actions">
         <button class="btn ghost small" data-act="help" aria-label="${tr('help')}"><span class="hide-sm">${tr('help')}</span><span class="show-sm" aria-hidden="true">?</span></button>
         <div class="seg" role="group" aria-label="${tr('language')}"><button data-act="lang" data-id="id" aria-pressed="${U.lang === 'id'}">ID</button><button data-act="lang" data-id="en" aria-pressed="${U.lang === 'en'}">EN</button></div>
-        <button class="btn ghost small hide-sm hide-md" data-act="new">${tr('newGame')}</button>
+        <button class="btn ghost small hide-sm hide-md" data-act="new">${tr('toMenu')}</button>
         ${playing ? `<button class="btn primary" data-act="end-quarter">${tr('endQuarter')} →</button>` : `<button class="btn primary" data-act="results">${tr('viewResults')}</button>`}
       </div>
     </header>`;
   }
 
   function renderGame() {
-    const tabs = [['map', 'tabMap'], ['list', 'tabList'], ['kpi', 'tabKpi']]
+    const tabs = [['map', 'tabMap'], ['list', 'tabList'], ['kpi', 'tabKpi'], ['projects', 'tabProjects'], ['team', 'tabTeam']]
       .map(([id, k]) => `<button class="tab" role="tab" data-act="main" data-id="${id}" aria-selected="${U.mainTab === id}">${tr(k)}</button>`).join('');
     const legend = `<div class="legend"><span><i class="p"></i>${tr('legRaise')}</span><span><i class="n"></i>${tr('legLower')}</span><span><i class="o"></i>${tr('legOff')}</span></div>`;
     let body;
     if (U.mainTab === 'map') body = `<div class="depts">${C.departments.map((d) => `<span><i style="background:var(--d-${d.id})"></i>${esc(L(d.name))}</span>`).join('')}</div><div class="mapbox" id="mapbox" aria-label="${tr('tabMap')}"></div>`;
     else if (U.mainTab === 'list') body = `<div class="listview">${renderPolicyList()}</div>`;
+    else if (U.mainTab === 'projects') body = `<div class="listview">${renderProjects()}</div>`;
+    else if (U.mainTab === 'team') body = `<div class="listview">${renderTeam()}</div>`;
     else body = `<div class="listview">${renderKpiList()}</div>`;
     const railTabs = [['stake', 'tabStake'], ['fin', 'tabFin'], ['mandate', 'tabMandate']]
       .map(([id, k]) => `<button class="tab" role="tab" data-act="rail" data-id="${id}" aria-selected="${U.railTab === id}">${tr(k)}</button>`).join('');
@@ -484,6 +592,12 @@
     if (n.type === 'risk') { const r = REV[n.id]; return { tag: r.kind === 'good' ? 'good' : 'bad', label: r.kind === 'good' ? tr('tagGood') : tr('tagRisk'), text: L(r.text) }; }
     if (n.type === 'consequence') return { tag: 'bad', label: tr('tagConseq'), text: L(n.text) };
     if (n.type === 'borrow') return { tag: 'bad', label: tr('tagFin'), text: tr('borrowNews', money(n.amount)) };
+    if (n.type === 'dirResign') return { tag: 'bad', label: tr('tagTeam'), text: tr('newsDirResign', n.name, L(E.ROLE[n.dept].title)) };
+    if (n.type === 'dirLeak') return { tag: 'bad', label: tr('tagTeam'), text: tr('newsDirLeak', n.name, L(E.ROLE[n.dept].title)) };
+    if (n.type === 'projDone') return { tag: 'good', label: tr('tagProj'), text: tr('newsProjDone', L(E.PRJ[n.id].name)) };
+    if (n.type === 'projOverrun') return { tag: 'bad', label: tr('tagProj'), text: tr('newsProjOverrun', L(E.PRJ[n.id].name)) };
+    if (n.type === 'projDelay') return { tag: 'bad', label: tr('tagProj'), text: tr('newsProjDelay', L(E.PRJ[n.id].name)) };
+    if (n.type === 'projGate') return { tag: 'info', label: tr('tagProj'), text: tr('newsProjGate', L(E.PRJ[n.id].name)) };
     return { tag: 'info', label: '', text: '' };
   }
   function allNews() {
@@ -557,6 +671,113 @@
       </button>`);
     }
     return `<div class="kpi-grid">${out.join('')}</div>`;
+  }
+
+  /* --------------------------------------------------- leadership team */
+
+  const loyCol = (v) => (v < 0.3 ? 'var(--neg)' : v < 0.5 ? 'var(--warn)' : 'var(--pos)');
+  const meterBar = (v, col) => `<span class="hbar"><i style="width:${(clamp(v) * 100).toFixed(1)}%;background:${col}"></i></span>`;
+  const theoryBox = (text) => `<div class="theory-inline">${ico('book-open')}<span>${text}</span></div>`;
+  // Policy level as a director sees it: on/off sliders by intensity, bipolar ones by direction.
+  function polLevel(id) {
+    const p = P(id), st = S.pol[id];
+    return p.kind === 'bipolar' ? 2 * st.x - 1 : st.on ? st.x : 0;
+  }
+  function agendaChips(list, like) {
+    return list.map(([id]) => {
+      const happy = like ? polLevel(id) > 0.05 : polLevel(id) <= 0.05;
+      return `<button class="agenda-chip ${happy ? 'ok' : 'no'}" data-act="detail" data-type="pol" data-id="${id}" title="${esc(L(P(id).name))}">${ico(iconName('pol', id))}<span>${esc(L(P(id).short))}</span></button>`;
+    }).join('');
+  }
+  function dirHead(dept, d) {
+    const role = E.ROLE[dept];
+    return `<div class="dcard-head"><span class="chip" style="background:var(--d-${dept});color:var(--di-${dept})">${ico(d.vacant ? 'user-round-x' : 'circle-user-round')}</span>
+      <div><span class="eyebrow">${esc(L(role.title))} · ${role.abbr}</span><b>${d.vacant ? tr('vacant') : esc(d.name)}</b></div></div>`;
+  }
+  function renderTeam() {
+    const team = S.team, playing = S.status === 'playing';
+    const loyAvg = E.teamAvg(S, 'loy'), compAvg = E.teamAvg(S, 'comp');
+    const vac = Object.values(team).filter((d) => d.vacant).length;
+    const capFx = (loyAvg > 0.65 ? 1 : loyAvg < 0.35 ? -1 : 0) - vac;
+    const stat = (k, v, cls = '', note = '') => `<div class="stat"><span class="eyebrow">${k}</span><span class="v ${cls}">${v}</span>${note ? `<span class="d muted">${note}</span>` : ''}</div>`;
+    const cards = C.departments.map((dep) => {
+      const d = team[dep.id], cost = E.hireCost(S, dep.id);
+      const btn = playing ? `<button class="btn small ${d.vacant ? 'primary' : ''}" data-act="team-hire" data-id="${dep.id}" ${d.hiredQ === S.t ? 'disabled' : ''}>${d.hiredQ === S.t ? tr('hiredThisQ') : `${d.vacant ? tr('fillSeat') : tr('replace')} · ${cost}`}</button>` : '';
+      const factor = `<span class="mono muted small">${tr('deptEffect', nf(2).format(E.deptFactor(S, dep.id)))}</span>`;
+      if (d.vacant) return `<div class="dcard vacant">${dirHead(dep.id, d)}<p class="muted">${tr('vacantD', esc(d.left || ''))}</p><div class="dcard-foot">${factor}${btn}</div></div>`;
+      const trt = E.TRAIT[d.trait], comp = E.dirComp(S, dep.id), tgt = E.loyaltyTarget(S, dep.id);
+      const fresh = d.since > 0 && S.t - d.since < 2;
+      return `<div class="dcard">${dirHead(dep.id, d)}
+        <div class="trait"><span class="tag info">${esc(L(trt.name))}</span><span>${esc(L(trt.desc))}</span></div>
+        <div class="dmeter"><span>${tr('competence')}</span>${meterBar(comp, 'var(--ink-2)')}<span class="mono">${nf(0).format(comp * 100)}</span></div>
+        <div class="dmeter"><span>${tr('loyalty')}</span>${meterBar(d.loy, loyCol(d.loy))}<span class="mono ${d.loy < 0.3 ? 'neg' : ''}">${nf(0).format(d.loy * 100)} ${arrow(tgt - d.loy, 0.01)}</span></div>
+        <div class="agenda"><span class="eyebrow">${tr('agendaLikes')}</span><div>${agendaChips(trt.likes, true)}</div></div>
+        <div class="agenda"><span class="eyebrow">${tr('agendaDislikes')}</span><div>${agendaChips(trt.dislikes, false)}</div></div>
+        <span class="mono muted small">${tr('loyHeading', nf(0).format(tgt * 100))}${fresh ? ' · ' + tr('newHire') : ''}</span>
+        <div class="dcard-foot">${factor}${btn}</div></div>`;
+    }).join('');
+    return `<div class="panel-head"><h2>${tr('teamTitle')}</h2><p class="lead">${tr('teamIntro')}</p>${theoryBox(tr('teamTheory'))}</div>
+      <div class="stat-grid four">
+        ${stat(tr('avgLoy'), nf(0).format(loyAvg * 100), loyAvg < 0.35 ? 'neg' : '')}
+        ${stat(tr('avgComp'), nf(0).format(compAvg * 100))}
+        ${stat(tr('vacancies'), vac, vac ? 'neg' : '')}
+        ${stat(tr('capEffect'), (capFx > 0 ? '+' : capFx < 0 ? '−' : '') + Math.abs(capFx), capFx < 0 ? 'neg' : capFx > 0 ? 'pos' : '', tr('capEffectD'))}
+      </div>
+      <div class="dgrid">${cards}</div>`;
+  }
+
+  /* ------------------------------------------------- strategic projects */
+
+  function projGains(fx) {
+    const out = [];
+    for (const [id, d] of fx.base || []) out.push(`${esc(L(V(id).short))} ${pts(d, 0)}`);
+    for (const [k, d] of fx.finp || []) out.push(esc(k === 'revMult' ? tr('projRevenue', spct(d, 0)) : k === 'cogsAdd' ? tr('projUnitCost', spct(d, 1)) : tr('projOpex', spct(d, 1))));
+    if (fx.rights) out.push(esc(tr('projRights', pct(fx.rights))));
+    for (const [k, id, v] of fx.mods || []) if (k === 'g') out.push(esc(tr('projSupport', L(G(id).name), pts(v, 0))));
+    return out.map((g) => `<span class="gain">${g}</span>`).join('');
+  }
+  const execFactor = (dept) => 0.7 + 0.6 * E.dirComp(S, dept);
+  function projCard(p, a) {
+    const dir = S.team[p.dept], comp = E.dirComp(S, p.dept), playing = S.status === 'playing';
+    const lead = tr('projLead', E.ROLE[p.dept].abbr, dir.vacant ? tr('vacant') : dir.name, nf(0).format(comp * 100));
+    let body, foot = '';
+    if (a) {
+      const fresh = a.q0 === S.t && a.paid === 0;
+      const left = Math.max(1, Math.ceil((1 - a.prog) * p.dur / execFactor(p.dept)));
+      body = `<div class="pprog"><div class="control-top"><span class="eyebrow">${tr('projProgress')}</span><span class="mono">${pct(Math.min(1, a.prog))} · ${fresh ? tr('projStartsNow') : tr('projLeft', left)}</span></div>
+        <span class="hbar"><i style="width:${(Math.min(1, a.prog) * 100).toFixed(1)}%;background:var(--accent)"></i></span></div>
+        <div class="pstats"><div><span class="eyebrow">${tr('projPaid')}</span><b>${money(a.paid)}</b></div><div><span class="eyebrow">${tr('projInst')}</span><b>${money(E.projInstallment(a))}</b></div>
+        ${a.mult > 1.001 ? `<div><span class="eyebrow">${tr('projCost')}</span><b class="neg">${tr('projOverrun', nf(0).format((a.mult - 1) * 100))}</b></div>` : ''}</div>`;
+      if (playing) foot = `${fresh ? '' : `<span class="muted small">${tr('projStopNote')}</span>`}<button class="btn small ${fresh ? 'ghost' : 'danger'}" data-act="proj-stop" data-id="${p.id}">${fresh ? tr('projUndo') : tr('projStop')}</button>`;
+    } else {
+      const risk = clamp(p.risk * (1.4 - comp), 0, 1);
+      body = `<div class="pstats"><div><span class="eyebrow">${tr('projCost')}</span><b>${money(p.cost * E.volume(S))}</b></div>
+        <div><span class="eyebrow">${tr('projDur')}</span><b>${tr('projQ', Math.ceil(p.dur / execFactor(p.dept)))}</b></div>
+        <div><span class="eyebrow">${tr('projRisk')}</span><b>${pct(risk)}</b></div></div>`;
+      if (playing) foot = `<button class="btn small primary" data-act="proj-start" data-id="${p.id}" ${E.canStart(S, p.id) ? '' : 'disabled'}>${tr('projStart')} · ${p.cap}</button>`;
+    }
+    return `<div class="pcard ${a ? 'active' : ''}">
+      <div class="dcard-head"><span class="chip" style="background:var(--d-${p.dept});color:var(--di-${p.dept})">${ico(p.icon)}</span><div><span class="eyebrow">${esc(L(DEPT[p.dept].name))}</span><b>${esc(L(p.name))}</b></div></div>
+      <span class="mono muted small">${esc(lead)}</span>
+      <p class="muted">${esc(L(p.desc))}</p>
+      ${body}
+      <div class="gains"><span class="eyebrow">${tr('projGains')}</span>${projGains(p.fx)}</div>
+      ${p.during ? `<div class="gains"><span class="eyebrow">${tr('projDuring')}</span><span class="gain neg">${esc(tr('projRevenue', spct(p.during.revMult || 0, 0)))}</span></div>` : ''}
+      ${p.gateText ? `<p class="muted small">${esc(L(p.gateText))}</p>` : ''}
+      ${foot ? `<div class="dcard-foot">${foot}</div>` : ''}
+    </div>`;
+  }
+  function renderProjects() {
+    const pr = S.projects, list = E.projectList(S);
+    const active = pr.active.map((a) => projCard(E.PRJ[a.id], a)).join('');
+    const avail = list.filter((p) => !pr.active.some((a) => a.id === p.id) && !pr.done.includes(p.id)).map((p) => projCard(p, null)).join('');
+    const flags = (ids, icon) => ids.map((id) => `<span class="flag">${ico(icon)}${esc(L(E.PRJ[id].name))}</span>`).join('');
+    return `<div class="panel-head"><h2>${tr('projTitle')}</h2><p class="lead">${tr('projIntro', E.MAX_PROJECTS)}</p>${theoryBox(tr('projTheory'))}</div>
+      <h3 class="eyebrow sec">${tr('projActive')} · ${pr.active.length}/${E.MAX_PROJECTS}</h3>
+      <div class="pgrid">${active || `<p class="muted">${tr('projNone')}</p>`}</div>
+      ${pr.done.length ? `<h3 class="eyebrow sec">${tr('projDoneH')}</h3><div class="flags">${flags(pr.done, 'badge-check')}</div>` : ''}
+      ${avail ? `<h3 class="eyebrow sec">${tr('projAvail')}</h3>${pr.active.length >= E.MAX_PROJECTS ? `<p class="muted small">${tr('projFull', E.MAX_PROJECTS)}</p>` : ''}<div class="pgrid">${avail}</div>` : ''}
+      ${pr.cancelled.length ? `<h3 class="eyebrow sec">${tr('projCancelled')}</h3><div class="flags">${flags(pr.cancelled, 'user-round-x')}</div>` : ''}`;
   }
 
   /* ---------------------------------------------------------------- rail */
@@ -693,13 +914,7 @@
     const mstat = (k, v, d) => `<div class="stat"><span class="eyebrow">${k}</span><span class="v">${v}</span><span class="d ${signCls(d, 1e-3)}">${Math.abs(d) > 1e-3 ? arrow(d) : ''}</span></div>`;
     const regimes = C.macroEvents.filter((e) => e.regime && S.flags[e.id]).map((e) => `<span class="flag">${esc(L(e.name))}</span>`).join('');
     const news = allNews();
-    const logRows = S.log.filter((e) => e.type === 'policy' || e.type === 'case').slice().reverse().map((e) => {
-      if (e.type === 'case') {
-        const d = E.DIL[e.id];
-        return `<div><span class="q">${qLabel(e.t)}</span><span><span class="tag info">${tr('concept')}</span>${esc(L(d.title))}: <b>${esc(L(d.options[e.choice].label))}</b></span></div>`;
-      }
-      return `<div><span class="q">${qLabel(e.t)}</span><span>${e.changes.map(changeText).join('; ')}</span></div>`;
-    }).join('');
+    const logRows = S.log.slice().reverse().map(logRow).join('');
     return `${storyBlock()}
       <div class="block"><h3>${tr('objectives')}</h3>${objs}</div>
       <div class="block"><h3>${tr('economy')}</h3><div class="macro">
@@ -713,16 +928,29 @@
       <div class="block"><h3>${tr('regimes')}</h3><div class="flags">${regimes || `<span class="muted">${tr('noRegimes')}</span>`}</div></div>
       <div class="block"><h3>${tr('news')}</h3><div class="news">${news.length ? news.map((n) => `<div class="news-item"><span class="q">${qLabel(n.t)}</span><span><span class="tag ${n.tag}">${esc(n.label)}</span>${esc(n.text)}</span></div>`).join('') : `<span class="muted">${tr('noNews')}</span>`}</div></div>
       <div class="block"><h3>${tr('decisions')}</h3><div class="log">${logRows || `<span class="muted">${tr('noDecisions')}</span>`}</div></div>
-      <div><button class="btn" data-act="new">${tr('newGame')}</button></div>`;
+      <div class="block"><p class="muted" style="margin-bottom:8px">${tr('savedIn', U.slot)}</p><button class="btn" data-act="new">${tr('toMenu')}</button></div>`;
+  }
+  // One line of the decision log.
+  function logRow(e) {
+    const q = `<span class="q">${qLabel(e.t)}</span>`, tag = (k, cls) => `<span class="tag ${cls}">${tr(k)}</span>`;
+    if (e.type === 'case') { const d = E.DIL[e.id]; return `<div>${q}<span><span class="tag info">${esc(L(d.concept))}</span>${esc(L(d.title))}: <b>${esc(L(d.options[e.choice].label))}</b></span></div>`; }
+    if (e.type === 'policy') return `<div>${q}<span>${esc(e.changes.map(changeText).join('; '))}</span></div>`;
+    if (e.type === 'hire') return `<div>${q}<span>${tag('tagTeam', 'info')}${esc(tr('logHire', e.name, L(E.ROLE[e.dept].title)))}</span></div>`;
+    if (e.type === 'resign') return `<div>${q}<span>${tag('tagTeam', 'bad')}${esc(tr('logResign', e.name, L(E.ROLE[e.dept].title)))}</span></div>`;
+    if (e.type === 'projStart') return `<div>${q}<span>${tag('tagProj', 'info')}${esc(tr('logProjStart', L(E.PRJ[e.id].name)))}</span></div>`;
+    if (e.type === 'projDone') return `<div>${q}<span>${tag('tagProj', 'good')}${esc(tr('logProjDone', L(E.PRJ[e.id].name)))}</span></div>`;
+    if (e.type === 'projCancel') return `<div>${q}<span>${tag('tagProj', 'bad')}${esc(tr('logProjCancel', L(E.PRJ[e.id].name)))}</span></div>`;
+    return '';
   }
   // Story chapters reached so far: prologue, year-end chapters (by board mood) and epilogue.
   function storyBeats() {
     const st = E.SCEN[S.scenario].story;
     if (!st) return [];
     const beats = [{ label: tr('prolog'), text: L(st.prolog) }];
-    [['y1', 4], ['y2', 8]].forEach(([k, q], i) => {
-      if (S.t >= q && q < S.length && st[k]) beats.push({ label: `${tr('chapter', i + 2)} · ${tr('yearEnd', i + 1)}`, text: L(st[k][S.hist.approval[q] >= 0.55 ? 'good' : 'bad']) });
-    });
+    for (let y = 1; y <= 4; y++) {
+      const q = 4 * y, ch = st['y' + y];
+      if (ch && S.t >= q && q < S.length) beats.push({ label: `${tr('chapter', y + 1)} · ${tr('yearEnd', y)}`, text: L(ch[S.hist.approval[q] >= 0.55 ? 'good' : 'bad']) });
+    }
     if (S.status !== 'playing' && st.end) beats.push({ label: tr('epilogue'), text: L(st.end[epilogueKey()]) });
     return beats;
   }
@@ -1196,10 +1424,10 @@
     const m = U.modal;
     const html = {
       pol: modalPolicy, var: modalVar, fin: modalFin, sit: modalSit, grp: modalGroup, report: modalReport, rups: modalRups,
-      case: modalCase, end: modalEnd, help: modalHelp, confirm: modalConfirm, prolog: modalProlog,
+      case: modalCase, end: modalEnd, help: modalHelp, confirm: modalConfirm, prolog: modalProlog, hire: modalHire,
     }[m.type](m);
     const closable = !(m.type === 'case' && !m.done);
-    modalRoot.innerHTML = `<div class="scrim" data-act="scrim"><div class="modal ${m.type === 'end' || m.type === 'help' ? 'wide' : m.type === 'confirm' ? 'narrow' : ''} m-${m.type}" role="dialog" aria-modal="true" aria-labelledby="m-title">${html}</div></div>`;
+    modalRoot.innerHTML = `<div class="scrim" data-act="scrim"><div class="modal ${m.type === 'end' || m.type === 'help' || m.type === 'hire' ? 'wide' : m.type === 'confirm' ? 'narrow' : ''} m-${m.type}" role="dialog" aria-modal="true" aria-labelledby="m-title">${html}</div></div>`;
     modalRoot.querySelector('.scrim').dataset.closable = closable ? '1' : '';
     if (focusFirst) {
       const el = modalRoot.querySelector('[data-autofocus]') || modalRoot.querySelector('.m-foot .btn.primary') || modalRoot.querySelector('button');
@@ -1223,8 +1451,9 @@
     const minX = bip ? 0 : 0.1;
     const status = p.core ? `<span class="status on">${tr('core')}</span>` : `<span class="status ${st.on ? 'on' : ''}">${st.on ? tr('active') : tr('inactive')}</span>`;
     const chg = changed(m.id) ? `<span class="status chg">${tr('changedThisQ')}</span>` : '';
-    const mag = (c) => (bip ? c * (2 * d.x - 1) : c * d.x);
-    const curMag = (c) => (bip ? c * (2 * st.eff - 1) : c * st.eff);
+    const fac = E.deptFactor(S, p.dept), dir = S.team[p.dept];
+    const mag = (c) => (bip ? c * (2 * d.x - 1) : c * d.x) * fac;
+    const curMag = (c) => (bip ? c * (2 * st.eff - 1) : c * st.eff) * fac;
     const maxFx = Math.max(0.05, ...p.fx.map(([, c]) => Math.abs(c)));
     const fxRows = p.fx.map(([v, c]) => fxRow(`${esc(L(V(v).name))}`, c, maxFx,
       st.on || bip ? `${pts(curMag(c))} <small class="muted">${tr('nowContrib')}</small>` : `${pts(mag(c))} <small class="muted">${tr('potential')}</small>`,
@@ -1240,7 +1469,8 @@
     const elastic = p.id === 'pricing' ? `<span>${tr('elasticity', nf(2).format(E.elasticity(S)))}</span>` : '';
     return `${head(`${esc(L(dept.name))}`, `<span class="h-ico" style="background:var(--d-${p.dept});color:var(--di-${p.dept})">${ico(iconName('pol', p.id))}</span>${esc(L(p.name))}`, true, `var(--d-${p.dept})`)}
       <div class="m-body">
-        <div style="display:flex;gap:8px;flex-wrap:wrap">${status}${chg}<span class="status">${sp.label} · ${sp.note}</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${status}${chg}<span class="status">${sp.label} · ${sp.note}</span>
+          <button class="status link" data-act="main-team">${esc(tr('directorOf', L(E.ROLE[p.dept].title), dir.vacant ? tr('vacant') : dir.name, nf(2).format(fac)))}</button></div>
         <p class="lead">${esc(L(p.desc))}</p>
         <div class="control">
           <div class="control-top"><span class="eyebrow">${tr('intensity')}</span><span class="control-val" id="pv-label">${esc(policyLabel(p, d.x))}</span></div>
@@ -1446,7 +1676,8 @@
     const next = U.queue[0];
     const nextLabel = next === 'rups' ? tr('toRups') : next === 'case' ? tr('toCase') : next === 'end' ? tr('toEnd') : tr('startQ', qLabel(curQ()));
     const st = E.SCEN[S.scenario].story;
-    const ch = st && S.status === 'playing' && rep.t < S.length ? ({ 4: ['y1', 2, 1], 8: ['y2', 3, 2] }[rep.t] || null) : null;
+    const yr = rep.t / 4;
+    const ch = st && S.status === 'playing' && rep.t < S.length && rep.t % 4 === 0 && st['y' + yr] ? ['y' + yr, yr + 1, yr] : null;
     const chapter = ch && st[ch[0]] ? `<div class="story-card big"><div class="story-head">${ico(E.SCEN[S.scenario].icon)}<span class="eyebrow">${tr('chapter', ch[1])} · ${tr('yearEnd', ch[2])}</span></div><p>${esc(L(st[ch[0]][rep.approval >= 0.55 ? 'good' : 'bad']))}</p></div>` : '';
     return `${head(tr('quarterOf', rep.t, S.length), tr('reportTitle', qLabel(rep.t)), false)}
       <div class="m-body">
@@ -1514,6 +1745,7 @@
       `TSR ${spct(fs.tsr, 0)} · ${tr('ratingS')} ${E.RATINGS[S.fin.ratingIdx]} · ${tr('confidence')} ${pct(fs.approval)}`,
       `${tr('style')}: ${tr('style' + fs.style)}`,
       `${tr('sObj')}: ${fs.objectives.filter((o) => o.ok).length}/${fs.objectives.length}`,
+      `${tr('sumProjects')}: ${S.projects.done.length} · ${tr('sumHires')}: ${S.log.filter((e) => e.type === 'hire').length}`,
     ].join('\n');
   }
 
@@ -1527,9 +1759,7 @@
     H.money = money; H.pct = pct; H.signedPct = (v) => spct(v, 0);
     const objs = sc.objectives.map((o) => { const r = o.check(S, H); return `<div class="obj"><span class="ic ${r.ok ? 'ok' : ''}">${r.ok ? '✓' : ''}</span><span>${esc(L(o.text))}</span><span class="now">${esc(r.now)}</span></div>`; }).join('');
     const conf = S.hist.approval.map((v, i) => ({ v: v * 100, label: i === 0 ? (U.lang === 'id' ? 'Awal' : 'Start') : qLabel(i).replace(' 20', "'") }));
-    const logRows = S.log.filter((e) => e.type === 'policy' || e.type === 'case').map((e) => e.type === 'case'
-      ? `<div><span class="q">${qLabel(e.t)}</span><span><span class="tag info">${esc(L(E.DIL[e.id].concept))}</span>${esc(L(E.DIL[e.id].title))}: <b>${esc(L(E.DIL[e.id].options[e.choice].label))}</b></span></div>`
-      : `<div><span class="q">${qLabel(e.t)}</span><span>${esc(e.changes.map(changeText).join('; '))}</span></div>`).join('');
+    const logRows = S.log.map(logRow).join('');
     return `${head(`${esc(sc.company)} · ${tr('classCode')} ${esc(S.seed)}`, S.endReason === 'term' ? tr('endTitle') : tr('firedTitle'))}
       <div class="m-body">
         <p class="lead">${reason}</p>
@@ -1554,12 +1784,12 @@
   }
 
   function modalHelp() {
-    const rows = [['dPolicy', 'hPolicy'], ['dCapital', 'hCapital'], ['dVoters', 'hVoters'], ['dElection', 'hElection'], ['dSituations', 'hSituations'], ['dDilemmas', 'hDilemmas'], ['dBudget', 'hBudget'], ['dAssassin', 'hAssassin']]
-      .map(([a, b]) => `<tr><td>${tr(a)}</td><td>${tr(b)}</td></tr>`).join('');
+    const rows = [['dPolicy', 'hPolicy'], ['dCapital', 'hCapital'], ['dCabinet', 'hCabinet'], ['dVoters', 'hVoters'], ['dElection', 'hElection'], ['dSituations', 'hSituations'], ['dDilemmas', 'hDilemmas'], ['dBudget', 'hBudget'], ['dAssassin', 'hAssassin']]
+      .map(([a, b]) => `<tr><td>${tr(a)}</td><td>${tr(b, b === 'hSituations' ? C.situations.length : C.dilemmas.length)}</td></tr>`).join('');
     return `${head('CEO Mandate', tr('helpTitle'))}
       <div class="m-body">
         <div class="block"><h3>${tr('helpGoal')}</h3><p class="lead">${tr('helpGoalD')}</p></div>
-        <div class="help-steps">${['helpS1', 'helpS2', 'helpS3', 'helpS4', 'helpS5', 'helpS6', 'helpS7'].map((k) => `<div><p>${tr(k)}</p></div>`).join('')}</div>
+        <div class="help-steps">${['helpS1', 'helpS2', 'helpS3', 'helpS4', 'helpS5', 'helpS6', 'helpS7', 'helpS8', 'helpS9'].map((k) => `<div><p>${tr(k)}</p></div>`).join('')}</div>
         <div class="block"><h3>${tr('helpMapping')}</h3><div class="tbl-wrap"><table class="tbl"><tr><th>Democracy 3</th><th>${tr('helpHere')}</th></tr>${rows}</table></div></div>
         ${S ? `<div class="block"><h3>${tr('theoryHelp')}</h3><p class="muted" style="margin-bottom:10px">${tr('theoryHelpD')}</p><div class="tbl-wrap"><table class="tbl"><tr><th>${tr('link')}</th><th>${tr('theory')}</th></tr>${D().theories.filter((th) => !th.only || th.only.includes(S.scenario)).map((th) => `<tr><td class="nowrap">${esc(nameOf(th.from, true))} → ${esc(nameOf(th.to, true))}</td><td><b>${esc(L(th.name))}.</b> ${esc(L(th.text))}</td></tr>`).join('')}</table></div></div>` : ''}
         <p class="muted" style="font-size:12.5px">${tr('keys')}</p>
@@ -1580,17 +1810,63 @@
       <div class="m-foot">${S.t > 0 ? `<button class="btn primary" data-act="close">${tr('close')}</button>` : `<button class="btn primary" data-act="close" data-autofocus>${tr('begin', qLabel(curQ()))} →</button>`}</div>`;
   }
 
-  function modalConfirm() {
-    return `${head(tr('newGame'), tr('confirmNew'))}<div class="m-body"><p class="lead">${tr('confirmNewD')}</p></div>
-      <div class="m-foot"><button class="btn" data-act="close">${tr('cancel')}</button><button class="btn primary danger" style="color:var(--on-accent)" data-act="restart">${tr('yesNew')}</button></div>`;
+  function modalConfirm(m) {
+    const kind = m.kind || 'menu', foot = (act, label, danger) => `<div class="m-foot"><button class="btn" data-act="close">${tr('cancel')}</button><button class="btn primary ${danger ? 'danger' : ''}" ${danger ? 'style="color:var(--on-accent)"' : ''} data-act="${act}" ${m.slot ? `data-id="${m.slot}"` : ''}>${label}</button></div>`;
+    if (kind === 'menu') return `${head(tr('toMenu'), tr('confirmMenu'))}<div class="m-body"><p class="lead">${tr('confirmMenuD', U.slot)}</p></div>${foot('menu', tr('toMenu'))}`;
+    const d = U.slots[m.slot - 1], label = d ? esc(slotLabel(d)) : '';
+    if (kind === 'overwrite') return `${head(tr('slotN', m.slot), tr('confirmOverwrite', m.slot))}<div class="m-body"><p class="lead">${tr('confirmOverwriteD', label)}</p></div>${foot('overwrite', tr('yesOverwrite'), true)}`;
+    return `${head(tr('slotN', m.slot), tr('confirmDelete', m.slot))}<div class="m-body"><p class="lead">${tr('confirmDeleteD', label)}</p></div>${foot('slot-del-yes', tr('yesDelete'), true)}`;
+  }
+
+  function modalHire(m) {
+    const dept = m.id, d = S.team[dept], role = E.ROLE[dept];
+    const vol = E.volume(S), cost = E.hireCost(S, dept), left = E.capitalLeft(S);
+    const ok = S.status === 'playing' && d.hiredQ !== S.t && left >= cost;
+    let cur = `<p class="muted">${tr('vacantD', esc(d.left || ''))}</p>`;
+    if (!d.vacant) {
+      const ex = E.loyaltyTarget(S, dept, true), trt = E.TRAIT[d.trait];
+      const parts = [{ kind: 'base', val: 0.5 }, ...ex.parts.sort((a, b) => Math.abs(b.val) - Math.abs(a.val))];
+      const rows = parts.map((pt) => pt.kind === 'base'
+        ? `<div class="fx"><span class="fx-n muted">${tr('loyBase')}</span><span></span><span class="fx-v muted">50</span></div>`
+        : fxRow(esc(pt.kind === 'approval' ? tr('confidence') : nameOf(pt.ref)), pt.val, 0.2, pts(pt.val), pt.kind === 'pol' ? `data-act="detail" data-type="pol" data-id="${pt.ref}"` : '')).join('');
+      cur = `<div class="dcard flat">${dirHead(dept, d)}<div class="trait"><span class="tag info">${esc(L(trt.name))}</span><span>${esc(L(trt.desc))}</span></div>
+        <div class="dmeter"><span>${tr('competence')}</span>${meterBar(E.dirComp(S, dept), 'var(--ink-2)')}<span class="mono">${nf(0).format(E.dirComp(S, dept) * 100)}</span></div>
+        <div class="dmeter"><span>${tr('loyalty')}</span>${meterBar(d.loy, loyCol(d.loy))}<span class="mono">${nf(0).format(d.loy * 100)} → ${nf(0).format(ex.target * 100)}</span></div>
+        <h3 class="eyebrow" style="margin-top:6px">${tr('whyLoyal')}</h3><div class="fx-list">${rows}</div></div>`;
+    }
+    const react = d.vacant ? '' : d.comp >= 0.65 ? tr('boardReactGood') : d.comp < 0.45 ? tr('boardReactWeak') : '';
+    const cands = E.candidates(S, dept).map((c, i) => {
+      const trt = E.TRAIT[c.trait];
+      return `<div class="cand">
+        <div class="cand-top"><b>${esc(c.name)}</b><span class="tag info">${esc(L(trt.name))}</span></div>
+        <p class="muted">${esc(L(trt.desc))}</p>
+        <div class="dmeter"><span>${tr('competence')}</span>${meterBar(c.comp, 'var(--ink-2)')}<span class="mono">${nf(0).format(c.comp * 100)}</span></div>
+        <div class="agenda"><span class="eyebrow">${tr('agendaLikes')}</span><div>${agendaChips(trt.likes, true)}</div></div>
+        <div class="agenda"><span class="eyebrow">${tr('agendaDislikes')}</span><div>${agendaChips(trt.dislikes, false)}</div></div>
+        <div class="cand-foot"><span class="mono small">${tr('signFee')}: <b>${money(c.fee * vol)}</b></span><button class="btn small primary" data-act="hire" data-id="${i}" ${ok ? '' : 'disabled'}>${tr('appoint')} · ${cost}</button></div>
+      </div>`;
+    }).join('');
+    const sev = d.vacant ? 0 : E.SEVERANCE * vol;
+    return `${head(`${esc(L(role.title))} · ${role.abbr}`, tr('hireTitle', esc(L(role.title))))}
+      <div class="m-body">
+        <p class="lead">${tr('hireIntro')}</p>
+        ${cur}
+        ${react ? `<p class="preview-note">${react}</p>` : ''}
+        <div class="cands">${cands}</div>
+      </div>
+      <div class="m-foot"><div class="left">${tr('capCost')}: <b class="mono">${cost}</b> · ${tr('capLeft', left)}${sev ? ` · ${tr('severanceDir')}: <b class="mono">${money(sev)}</b>` : ''}${d.hiredQ === S.t ? ` · <span class="neg">${tr('hiredThisQ')}</span>` : ''}</div><button class="btn" data-act="close">${tr('close')}</button></div>`;
   }
 
   /* ------------------------------------------------------------- flow */
 
-  function startGame() {
+  function readSeedInput() {
     const input = document.getElementById('seed');
     if (input) U.seed = (input.value || 'MBA').trim().toUpperCase().slice(0, 24) || 'MBA';
+  }
+  function startGame(overwrite) {
+    readSeedInput();
     savePrefs();
+    if (!overwrite && U.slots[U.slot - 1]) { openModal({ type: 'confirm', kind: 'overwrite', slot: U.slot }); return; }
     S = E.newGame({ scenario: U.scenario, seed: U.seed, length: U.length });
     U.queue = [];
     U.mainTab = 'map';
@@ -1600,6 +1876,25 @@
     render();
     window.scrollTo(0, 0);
     openModal({ type: 'prolog' });
+  }
+
+  function resumeSlot(n) {
+    const d = readSlot(n);
+    if (!d) return;
+    U.slot = n;
+    savePrefs();
+    S = d.S; U.queue = d.queue || []; U.lastReport = d.lastReport || null;
+    U.mainTab = 'map'; U.railTab = 'stake'; U.modal = null; U.stack = [];
+    render();
+    window.scrollTo(0, 0);
+    if (U.queue.length && U.lastReport) advanceQueue(true);
+    else if (S.status !== 'playing') openModal({ type: 'end' });
+  }
+  function toMenu() {
+    saveGame();
+    S = null; U.modal = null; U.stack = []; U.queue = []; U.lastReport = null;
+    render(); renderModal();
+    window.scrollTo(0, 0);
   }
 
   function endQuarter() {
@@ -1662,20 +1957,32 @@
     }
     switch (act) {
       case 'lang': U.lang = id; savePrefs(); render(); if (U.modal) renderModal(); break;
-      case 'scenario': U.scenario = id; savePrefs(); { const v = document.getElementById('seed'); if (v) U.seed = v.value; } render(); break;
-      case 'length': U.length = Number(id); savePrefs(); { const v = document.getElementById('seed'); if (v) U.seed = v.value; } render(); break;
+      case 'scenario': U.scenario = id; readSeedInput(); savePrefs(); render(); break;
+      case 'length': U.length = Number(id); readSeedInput(); savePrefs(); render(); break;
+      case 'slot': U.slot = Number(id); readSeedInput(); savePrefs(); render(); break;
       case 'start': startGame(); break;
-      case 'resume': {
-        const d = U.saved;
-        if (!d) break;
-        S = d.S; U.queue = d.queue || []; U.lastReport = d.lastReport || null;
-        render();
-        window.scrollTo(0, 0);
-        if (U.queue.length && U.lastReport) advanceQueue(true);
-        else if (S.status !== 'playing') openModal({ type: 'end' });
+      case 'overwrite': U.modal = null; renderModal(); startGame(true); break;
+      case 'resume': resumeSlot(Number(id)); break;
+      case 'slot-del': readSeedInput(); openModal({ type: 'confirm', kind: 'delete', slot: Number(id) }); break;
+      case 'slot-del-yes': clearSlot(Number(id)); U.modal = null; renderModal(); render(); break;
+      case 'menu': toMenu(); break;
+      case 'main': U.mainTab = id; clearHover(); render(); break;
+      case 'main-team': U.mainTab = 'team'; U.modal = null; U.stack = []; renderModal(); clearHover(); render(); break;
+      case 'team-hire': openModal({ type: 'hire', id }, !!U.modal); break;
+      case 'hire': {
+        const m = U.modal, d0 = S.team[m.id];
+        if (E.hireDirector(S, m.id, Number(id))) {
+          saveGame();
+          toast(tr('hired', S.team[m.id].name, L(E.ROLE[m.id].title)));
+          U.stack = [];
+          U.modal = null;
+          renderModal();
+          render();
+        } else toast(d0.hiredQ === S.t ? tr('hiredThisQ') : tr('notEnough'));
         break;
       }
-      case 'main': U.mainTab = id; clearHover(); render(); break;
+      case 'proj-start': if (E.startProject(S, id)) { saveGame(); render(); } else toast(tr('notEnough')); break;
+      case 'proj-stop': if (E.cancelProject(S, id)) { saveGame(); render(); } break;
       case 'rail': U.railTab = id; render(); break;
       case 'detail': {
         const type = el.dataset.type;
@@ -1689,8 +1996,8 @@
       case 'results': openModal({ type: 'end' }); break;
       case 'help': openModal({ type: 'help' }); break;
       case 'prolog': openModal({ type: 'prolog' }, !!U.modal); break;
-      case 'new': openModal({ type: 'confirm' }); break;
-      case 'restart': clearSave(); S = null; U.modal = null; U.stack = []; U.queue = []; U.saved = null; render(); renderModal(); window.scrollTo(0, 0); break;
+      case 'new': openModal({ type: 'confirm', kind: 'menu' }); break;
+      case 'restart': toMenu(); break;
       case 'choose': {
         const m = U.modal;
         const d = E.DIL[m.id];
@@ -1777,7 +2084,7 @@
     document.title = 'CEO Mandate';
     if (M.ro) { M.ro.disconnect(); M.ro = null; }
     if (!S) {
-      U.saved = loadSave();
+      loadSlots();
       app.innerHTML = renderStart();
     } else {
       app.innerHTML = renderGame();

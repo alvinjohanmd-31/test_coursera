@@ -2,8 +2,9 @@
 /*
  * Headless balance check for CEO Mandate.
  *
- *   node test/simulate.js            # summary table for every scenario × strategy
- *   node test/simulate.js turnaround passive --trace   # quarter-by-quarter trace
+ *   node test/simulate.js                 # summary table, every scenario × strategy (12 and 20 quarters)
+ *   node test/simulate.js --len 20        # summary for one term length only
+ *   node test/simulate.js turnaround passive 0 --len 20   # quarter-by-quarter trace
  *
  * Exits non-zero if any run produces NaN/out-of-range values, so it doubles as a
  * smoke test after editing content.js.
@@ -38,6 +39,10 @@ const strategies = {
         ['pricing', true, 0.55], ['esgreport', true, 0.4], ['cyber', true, 0.6], ['hybrid', true, 0.5]],
       palmoil: [['expansion', false], ['safety', true, 0.7], ['esgreport', true, 0.6], ['greenops', true, 0.6], ['supplier', true, 0.6],
         ['lobbying', false], ['rnd', true, 0.4], ['csr', true, 0.5], ['dividend', true, 0.3], ['ai', true, 0.4]],
+      health: [['qualityctl', true, 0.7], ['hybrid', true, 0.5], ['training', true, 0.5], ['ethics', true, 0.5], ['custservice', true, 0.5],
+        ['wages', true, 0.55], ['automation', true, 0.4], ['outsourcing', false], ['cyber', true, 0.5]],
+      creator: [['supplier', true, 0.6], ['qualityctl', true, 0.5], ['esgreport', true, 0.5], ['greenops', true, 0.4], ['ethics', true, 0.5],
+        ['jit', true, 0.3], ['safety', true, 0.4], ['outsourcing', true, 0.4]],
     }[s.scenario];
     for (const [id, on, x] of want) {
       const st = s.pol[id];
@@ -58,6 +63,10 @@ const strategies = {
         [3, [['esgreport', true, 0.4], ['cyber', true, 0.6]]], [5, [['pricing', true, 0.55], ['advertising', true, 0.3]]]],
       palmoil: [[1, [['expansion', false], ['safety', true, 0.7], ['esgreport', true, 0.5]]], [2, [['greenops', true, 0.5], ['lobbying', false]]],
         [3, [['supplier', true, 0.6], ['csr', true, 0.5]]], [5, [['rnd', true, 0.4], ['greenops', true, 0.7]]]],
+      health: [[1, [['qualityctl', true, 0.6], ['ethics', true, 0.5], ['hybrid', true, 0.4]]], [2, [['training', true, 0.45], ['outsourcing', false]]],
+        [3, [['automation', true, 0.4], ['custservice', true, 0.45]]], [5, [['ai', true, 0.3], ['qualityctl', true, 0.7]]]],
+      creator: [[1, [['supplier', true, 0.5], ['qualityctl', true, 0.45], ['jit', true, 0.35]]], [2, [['esgreport', true, 0.45], ['ethics', true, 0.4]]],
+        [3, [['greenops', true, 0.4], ['safety', true, 0.4]]], [5, [['supplier', true, 0.65], ['rnd', true, 0.3]]]],
     }[s.scenario];
     for (const [from, moves] of plan) {
       if (s.t + 1 < from) continue;
@@ -66,6 +75,20 @@ const strategies = {
         if (st.on === on && (!on || Math.abs(st.x - x) < 0.01)) continue;
         E.setPolicy(s, id, on, on ? x : st.x);
       }
+    }
+  },
+  // The focused plan plus the new levers: replace the weakest director early and run
+  // strategic projects one after another.
+  builder: (s) => {
+    strategies.focused(s);
+    if (s.t === 1) {
+      const weak = Object.entries(s.team).filter(([, d]) => !d.vacant && d.comp < 0.45).sort((a, b) => a[1].comp - b[1].comp)[0];
+      if (weak) E.hireDirector(s, weak[0], 2);
+    }
+    for (const [d, x] of Object.entries(s.team)) if (x.vacant) E.hireDirector(s, d, 1);
+    if (s.t >= 2 && s.projects.active.length < 1) {
+      const next = E.projectList(s).filter((p) => E.canStart(s, p.id)).sort((a, b) => (b.only ? 1 : 0) - (a.only ? 1 : 0))[0];
+      if (next) E.startProject(s, next.id);
     }
   },
   // Pure shareholder primacy: cut everything, pay everything out.
@@ -99,8 +122,8 @@ function check(s, label) {
   if (bad.length) { failures++; console.log(`  !! ${label}: ${bad.join(', ')}`); }
 }
 
-function run(scenario, strat, choice, seed, trace) {
-  const s = E.newGame({ scenario, seed, length: 12 });
+function run(scenario, strat, choice, seed, trace, length = 12) {
+  const s = E.newGame({ scenario, seed, length });
   check(s, `${scenario} start`);
   if (trace) {
     console.log(`\n${scenario} / ${strat} / choice=${choice} / seed=${seed}`);
@@ -111,7 +134,7 @@ function run(scenario, strat, choice, seed, trace) {
     console.log('  sits', Object.entries(s.sit).filter(([, v]) => v.on).map(([k]) => k).join(',') || '-');
   }
   let q = 0;
-  while (s.status === 'playing' && q < 40) {
+  while (s.status === 'playing' && q < 60) {
     strategies[strat](s);
     const rep = E.endQuarter(s);
     check(s, `${scenario} t=${s.t}`);
@@ -126,6 +149,7 @@ function run(scenario, strat, choice, seed, trace) {
         ` px ${fmt(s.fin.price)} share ${fmt(s.vars.share * 40, 1)}% appr ${fmt(rep.approval * 100)} cap ${s.capital}` +
         ` | sh ${fmt(s.groups.shareholders.h * 100)} bd ${fmt(s.groups.board.h * 100)} em ${fmt(s.groups.employees.h * 100)} cu ${fmt(s.groups.customers.h * 100)}` +
         ` | ${Object.entries(s.sit).filter(([, v]) => v.on).map(([k]) => k).join(',')}` +
+        ` | team ${Object.values(s.team).map((d) => d.vacant ? '--' : Math.round(d.loy * 100)).join('/')} proj ${s.projects.active.map((a) => a.id + ':' + Math.round(a.prog * 100)).join(',')}` +
         `${rep.news.length ? ' | news ' + rep.news.map((n) => n.id || n.type).join(',') : ''}${rep.rups ? ` | RUPS ${rep.rups.pass ? 'PASS' : 'FAIL'}` : ''}`);
     }
     q++;
@@ -135,16 +159,21 @@ function run(scenario, strat, choice, seed, trace) {
 }
 
 const args = process.argv.slice(2);
+const opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
 if (args.length && !args[0].startsWith('-')) {
   const [scenario, strat = 'passive', choice = '0'] = args;
-  run(scenario, strat, choice === 'random' ? 'random' : Number(choice), args.includes('--seed') ? args[args.indexOf('--seed') + 1] : 'MBA', true);
+  run(scenario, strat, choice === 'random' ? 'random' : Number(choice), opt('--seed', 'MBA'), true, Number(opt('--len', 12)));
 } else {
   const seeds = ['MBA', 'KELAS-A', 'SBM2027', 'X1', 'PPM'];
+  const lengths = args.includes('--len') ? [Number(opt('--len'))] : [12, 20];
+  const only = opt('--scen', null);
+  for (const length of lengths) {
+  console.log(`\n== ${length} quarters`);
   console.log('scenario    strategy    choice  survived  avgQ  avgScore  grades     avgTSR   avgAppr  endReasons');
-  for (const scenario of C.scenarios.map((x) => x.id)) {
+  for (const scenario of C.scenarios.map((x) => x.id).filter((x) => !only || x === only)) {
     for (const strat of Object.keys(strategies)) {
       for (const choice of [0, 1]) {
-        const results = seeds.map((seed) => run(scenario, strat, choice, seed, false));
+        const results = seeds.map((seed) => run(scenario, strat, choice, seed, false, length));
         const survived = results.filter((r) => r.s.status === 'done').length;
         const avg = (f) => results.reduce((a, r) => a + f(r), 0) / results.length;
         const reasons = {};
@@ -154,6 +183,7 @@ if (args.length && !args[0].startsWith('-')) {
           `${fmt(avg((r) => r.sc.approval) * 100).padEnd(8)} ${JSON.stringify(reasons)}`);
       }
     }
+  }
   }
 }
 if (failures) { console.log(`\n${failures} invariant failure(s)`); process.exit(1); }
