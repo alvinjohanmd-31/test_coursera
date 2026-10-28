@@ -703,6 +703,10 @@ button.fx:hover .fx-n { text-decoration: underline; }
 .scen-ico { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--tone); color: #fff; }
 .scen-ico .i { width: 24px; height: 24px; }
 .new-tag { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+.x-tag { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: var(--neg); color: #fff; white-space: nowrap; }
+.mode-flag { font-style: normal; font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; background: var(--neg); color: #fff; }
+.theory-small { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.theory-small .i { flex: none; width: 15px; height: 15px; color: var(--accent); margin-top: 2px; }
 .scen-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .story-card {
   display: grid;

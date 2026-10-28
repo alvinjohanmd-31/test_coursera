@@ -5,6 +5,7 @@
  *   node test/simulate.js                 # summary table, every scenario × strategy (12 and 20 quarters)
  *   node test/simulate.js --len 20        # summary for one term length only
  *   node test/simulate.js turnaround passive 0 --len 20   # quarter-by-quarter trace
+ *   node test/simulate.js --mode hard     # the same summary on the hard difficulty
  *
  * Exits non-zero if any run produces NaN/out-of-range values, so it doubles as a
  * smoke test after editing content.js.
@@ -43,6 +44,9 @@ const strategies = {
         ['wages', true, 0.55], ['automation', true, 0.4], ['outsourcing', false], ['cyber', true, 0.5]],
       creator: [['supplier', true, 0.6], ['qualityctl', true, 0.5], ['esgreport', true, 0.5], ['greenops', true, 0.4], ['ethics', true, 0.5],
         ['jit', true, 0.3], ['safety', true, 0.4], ['outsourcing', true, 0.4]],
+      ryokan: [['dividend', false], ['outsourcing', false], ['wages', true, 0.6], ['training', true, 0.55], ['hybrid', true, 0.55], ['dei', true, 0.6],
+        ['qualityctl', true, 0.6], ['ecommerce', true, 0.6], ['custservice', true, 0.7], ['advertising', true, 0.5], ['loyalty', true, 0.6], ['ai', true, 0.5],
+        ['supplier', true, 0.5], ['csr', true, 0.4], ['esgreport', true, 0.4], ['execpay', true, 0.3]],
     }[s.scenario];
     for (const [id, on, x] of want) {
       const st = s.pol[id];
@@ -67,6 +71,8 @@ const strategies = {
         [3, [['automation', true, 0.4], ['custservice', true, 0.45]]], [5, [['ai', true, 0.3], ['qualityctl', true, 0.7]]]],
       creator: [[1, [['supplier', true, 0.5], ['qualityctl', true, 0.45], ['jit', true, 0.35]]], [2, [['esgreport', true, 0.45], ['ethics', true, 0.4]]],
         [3, [['greenops', true, 0.4], ['safety', true, 0.4]]], [5, [['supplier', true, 0.65], ['rnd', true, 0.3]]]],
+      ryokan: [[1, [['dividend', true, 0.15], ['outsourcing', false], ['qualityctl', true, 0.5], ['hybrid', true, 0.4], ['advertising', true, 0.4]]], [2, [['dei', true, 0.45], ['ecommerce', true, 0.45]]],
+        [3, [['training', true, 0.45], ['ai', true, 0.35]]], [5, [['wages', true, 0.5], ['supplier', true, 0.5]]]],
     }[s.scenario];
     for (const [from, moves] of plan) {
       if (s.t + 1 < from) continue;
@@ -122,8 +128,8 @@ function check(s, label) {
   if (bad.length) { failures++; console.log(`  !! ${label}: ${bad.join(', ')}`); }
 }
 
-function run(scenario, strat, choice, seed, trace, length = 12) {
-  const s = E.newGame({ scenario, seed, length });
+function run(scenario, strat, choice, seed, trace, length = 12, mode = 'normal') {
+  const s = E.newGame({ scenario, seed, length, mode });
   check(s, `${scenario} start`);
   if (trace) {
     console.log(`\n${scenario} / ${strat} / choice=${choice} / seed=${seed}`);
@@ -160,20 +166,21 @@ function run(scenario, strat, choice, seed, trace, length = 12) {
 
 const args = process.argv.slice(2);
 const opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
+const mode = opt('--mode', 'normal');
 if (args.length && !args[0].startsWith('-')) {
   const [scenario, strat = 'passive', choice = '0'] = args;
-  run(scenario, strat, choice === 'random' ? 'random' : Number(choice), opt('--seed', 'MBA'), true, Number(opt('--len', 12)));
+  run(scenario, strat, choice === 'random' ? 'random' : Number(choice), opt('--seed', 'MBA'), true, Number(opt('--len', 12)), mode);
 } else {
   const seeds = ['MBA', 'KELAS-A', 'SBM2027', 'X1', 'PPM'];
   const lengths = args.includes('--len') ? [Number(opt('--len'))] : [12, 20];
   const only = opt('--scen', null);
   for (const length of lengths) {
-  console.log(`\n== ${length} quarters`);
+  console.log(`\n== ${length} quarters · ${mode}`);
   console.log('scenario    strategy    choice  survived  avgQ  avgScore  grades     avgTSR   avgAppr  endReasons');
   for (const scenario of C.scenarios.map((x) => x.id).filter((x) => !only || x === only)) {
     for (const strat of Object.keys(strategies)) {
       for (const choice of [0, 1]) {
-        const results = seeds.map((seed) => run(scenario, strat, choice, seed, false, length));
+        const results = seeds.map((seed) => run(scenario, strat, choice, seed, false, length, mode));
         const survived = results.filter((r) => r.s.status === 'done').length;
         const avg = (f) => results.reduce((a, r) => a + f(r), 0) / results.length;
         const reasons = {};

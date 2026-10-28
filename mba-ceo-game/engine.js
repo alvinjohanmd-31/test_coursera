@@ -16,11 +16,21 @@
 
   const RATINGS = ['AAA', 'AA', 'A', 'BBB', 'BB', 'B', 'CCC'];
   const SPREAD = [0.5, 0.8, 1.2, 1.8, 2.8, 4.2, 6.5]; // percentage points over BI-Rate
-  const TAX = 0.22; // Indonesian corporate income tax
+  const TAX = 0.22; // Indonesian corporate income tax (scenarios abroad override it)
   const SHARE_SCALE = 0.4; // share KPI 1.0 = 40% market share
   const CAPITAL_MAX = 30;
-  const MACRO_BASE = { gdp: 5.0, bi: 6.0, input: 1.0, fx: 16000 };
-  const INFLATION = 0.03;
+  // Home economy of a scenario: Indonesia unless the scenario sets `locale`
+  // (currency, long-run GDP growth, policy rate, USD exchange rate, inflation, tax, cash yield).
+  const DEFAULT_LOCALE = { currency: 'IDR', gdp: 5.0, rate: 6.0, fx: 16000, inflation: 0.03, tax: TAX, cashYield: 0.03 };
+  const locCache = {};
+  const LOC = (id) => locCache[id] || (locCache[id] = Object.assign({}, DEFAULT_LOCALE, SCEN[id].locale));
+  // Difficulty modes. Hard: less Executive Capital, likelier bad risks, rougher macro swings,
+  // more macro events, grumpier stakeholders and crises that trigger sooner.
+  const MODES = {
+    normal: { capGain: 0, riskMul: 1, noise: 1, eventMul: 1, mood: 0, sitShift: 0 },
+    hard: { capGain: -1, riskMul: 1.4, noise: 1.3, eventMul: 1.35, mood: -0.015, sitShift: 0.02 },
+  };
+  const MODE = (s) => MODES[s.mode] || MODES.normal;
   const HIRE_CAP = 4, VACANT_CAP = 2, SEVERANCE = 0.004, MAX_PROJECTS = 2;
 
   const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
@@ -37,7 +47,9 @@
     d.POL = index(d.pol);
     d.VAR = index(d.var);
     d.GRP = index(d.grp);
-    d.sit = C.situations.filter((x) => inScenario(x, scenario));
+    // Situations take renames only (name, short, desc, theory); their logic stays shared.
+    d.sit = merge(C.situations.filter((x) => inScenario(x, scenario)), m.sit);
+    d.SIT = index(d.sit);
     d.dil = C.dilemmas.filter((x) => inScenario(x, scenario));
     d.theories = C.theories.filter((x) => inScenario(x, scenario));
     return (defCache[scenario] = d);
@@ -174,6 +186,7 @@
     };
     for (const g of C.groups) tg[g.id] = g.base;
     if (explainId) parts.push({ kind: 'base', val: GRP[explainId].base });
+    if (MODE(s).mood) for (const g of C.groups) add(g.id, MODE(s).mood, 'mode');
     const sc = SCEN[s.scenario];
     const focus = { 'f:profit': sc.profitW ?? 1, 'f:growth': sc.growthW ?? 1 };
     for (const g of C.groups) {
@@ -252,18 +265,20 @@
     }
     return num / den;
   }
-  const sitOn = (si) => si.on ?? (si.kind === 'bad' ? 0.66 : 0.72);
-  const sitOff = (si) => si.off ?? (si.kind === 'bad' ? 0.55 : 0.62);
+  // Hard mode lowers the trigger level of crises (and raises it for opportunities).
+  const shift = (si, s) => (s ? MODE(s).sitShift : 0) * (si.kind === 'bad' ? -1 : 1);
+  const sitOn = (si, s) => (si.on ?? (si.kind === 'bad' ? 0.66 : 0.72)) + shift(si, s);
+  const sitOff = (si, s) => (si.off ?? (si.kind === 'bad' ? 0.55 : 0.62)) + shift(si, s);
 
   function stepSituations(s, rep) {
     for (const si of C.situations) {
       const st = s.sit[si.id];
       st.score = sitScore(s, si.id);
-      if (!st.on && st.score >= sitOn(si)) {
+      if (!st.on && st.score >= sitOn(si, s)) {
         st.on = true;
         st.since = s.t;
         if (rep) rep.started.push(si.id);
-      } else if (st.on && st.score < sitOff(si)) {
+      } else if (st.on && st.score < sitOff(si, s)) {
         st.on = false;
         if (rep) rep.ended.push(si.id);
       }
@@ -289,10 +304,10 @@
   }
 
   function computePL(s, extra = 0) {
-    const sc = SCEN[s.scenario], f = s.fin, m = s.macro, adj = finAdjust(s);
+    const sc = SCEN[s.scenario], f = s.fin, m = s.macro, adj = finAdjust(s), B = LOC(s.scenario);
     const vol = volume(s);
     const priceFactor = 0.85 + 0.30 * s.pol.pricing.x;
-    const fxMove = m.fx / MACRO_BASE.fx - 1;
+    const fxMove = m.fx / B.fx - 1;
     const revenue = vol * priceFactor * Math.max(0.5, 1 + adj.revMult) * (1 + (sc.fxRev || 0) * fxMove);
     const inputIdx = m.input * (1 + (sc.fxCost ?? 0.4) * fxMove);
     const inputFactor = 1 + (inputIdx - 1) * 0.6 * (1 - 0.7 * polEff(s, 'hedging'));
@@ -314,10 +329,10 @@
     const ebitda = revenue - cogs - opex - carbon - polCost;
     const da = (0.7 * f.volRef + 0.3 * vol) * sc.da;
     const rate = (m.bi + SPREAD[f.ratingIdx]) / 100 + adj.interestAdd;
-    const interest = (f.debt * rate) / 4 - (Math.max(0, f.cash) * 0.03) / 4;
+    const interest = (f.debt * rate) / 4 - (Math.max(0, f.cash) * B.cashYield) / 4;
     const extraordinary = extra + adj.cost * vol;
     const ebt = ebitda - da - interest - extraordinary;
-    const tax = Math.max(0, ebt) * TAX;
+    const tax = Math.max(0, ebt) * B.tax;
     const ni = ebt - tax;
     return { vol, revenue, priceFactor, inputIdx, inputFactor, cogs, cogsRatio, opex, carbon, polCost, items, ebitda, da,
       ebit: ebitda - da, rate, interest, extraordinary, ebt, tax, ni, psAdd: adj.psAdd };
@@ -388,11 +403,13 @@
 
   function stepFinance(s, rep, extra, capex) {
     const sc = SCEN[s.scenario], f = s.fin;
-    const g = (sc.beta * (s.macro.gdp + INFLATION * 100)) / 100;
+    const B = LOC(s.scenario);
+    // Nominal market growth, plus any structural drift (e.g. a shrinking, aging home market).
+    const g = (sc.beta * (s.macro.gdp + B.inflation * 100)) / 100 + (sc.marketDrift || 0);
     f.M *= (1 + g / 4) * s.marketShock;
     // Fixed costs rise with inflation, and step up once volume outgrows them (growth needs
     // people and systems), but stay sticky when volume falls.
-    f.volRef = Math.max(f.volRef * (1 + INFLATION / 4), volume(s) * 0.8);
+    f.volRef = Math.max(f.volRef * (1 + B.inflation / 4), volume(s) * 0.8);
     s.marketShock = 1;
     const pl = computePL(s, extra);
     const div = isOn(s, 'dividend') ? Math.max(0, pl.ni) * (0.1 + 0.6 * s.pol.dividend.x) : 0;
@@ -432,25 +449,25 @@
   /* ------------------------------------------------------------------- macro */
 
   function stepMacro(s, rep) {
-    const r = rng(s.seed, s.scenario, 'macro', s.t), m = s.macro;
-    m.gdp += (MACRO_BASE.gdp - m.gdp) * 0.3 + gauss(r) * 0.25;
-    m.bi += (MACRO_BASE.bi - m.bi) * 0.12 + gauss(r) * 0.05;
-    m.input += (MACRO_BASE.input - m.input) * 0.22 + gauss(r) * 0.015;
-    m.fx += (MACRO_BASE.fx - m.fx) * 0.12 + gauss(r) * 120;
+    const r = rng(s.seed, s.scenario, 'macro', s.t), m = s.macro, B = LOC(s.scenario), k = MODE(s).noise;
+    m.gdp += (B.gdp - m.gdp) * 0.3 + gauss(r) * 0.25 * k;
+    m.bi += (B.rate - m.bi) * 0.12 + gauss(r) * 0.05 * k;
+    m.input += (1 - m.input) * 0.22 + gauss(r) * 0.015 * k;
+    m.fx += (B.fx - m.fx) * 0.12 + gauss(r) * B.fx * 0.0075 * k;
     m.comp += (s.compBase - m.comp) * 0.2 + gauss(r) * 0.015;
     for (const ev of s.timeline) {
       if (ev.q !== s.t) continue;
       MEV[ev.id].apply(s);
       rep.news.push({ type: 'macro', id: ev.id });
     }
-    m.gdp = clamp(m.gdp, -3, 9);
-    m.bi = clamp(m.bi, 3.5, 10);
+    m.gdp = clamp(m.gdp, B.gdp - 8, B.gdp + 4);
+    m.bi = clamp(m.bi, Math.max(-0.5, B.rate - 2.5), B.rate + 4);
     m.input = clamp(m.input, 0.75, 1.6);
-    m.fx = clamp(m.fx, 13500, 21000);
+    m.fx = clamp(m.fx, B.fx * 0.84, B.fx * 1.31);
     m.comp = clamp(m.comp, 0.2, 0.95);
   }
 
-  function buildTimeline(seed, scenario, length) {
+  function buildTimeline(seed, scenario, length, mode = 'normal') {
     const sc = SCEN[scenario], r = rng(seed, scenario, 'timeline');
     const out = [], used = new Set();
     for (const [id, lo, hi] of sc.forced || []) {
@@ -460,7 +477,7 @@
     }
     const forcedIds = new Set(out.map((e) => e.id));
     const pool = shuffle(C.macroEvents.filter((e) => !forcedIds.has(e.id) && inScenario(e, scenario) && !(e.only && sc.forced && sc.forced.some(([f]) => f === e.id))), r);
-    const n = Math.max(3, Math.round(length * 0.4));
+    const n = Math.max(3, Math.round(length * 0.4 * (MODES[mode] || MODES.normal).eventMul));
     let picked = 0;
     for (const ev of pool) {
       if (picked >= n) break;
@@ -553,7 +570,7 @@
     let n = 0;
     for (const ev of C.riskEvents) {
       if (n >= 2) break;
-      const p = clamp(ev.p(s, H), 0, 0.6);
+      const p = clamp(ev.p(s, H) * (ev.kind === 'bad' ? MODE(s).riskMul : 1), 0, 0.6);
       if (rng(s.seed, s.scenario, 'risk', ev.id, s.t)() < p) {
         applyFx(s, ev.fx(s, H), ev.id);
         rep.news.push({ type: 'risk', id: ev.id });
@@ -567,14 +584,15 @@
   // One director per department, like cabinet ministers in Democracy 3. Competence scales
   // the KPI effects of the department's policies; loyalty follows each director's agenda.
   const round2 = (x) => Math.round(x * 100) / 100;
+  const namesOf = (scenario) => SCEN[scenario].names || C.names;
   function freeName(s, r) {
     const taken = new Set(Object.values(s.team || {}).map((d) => d.name));
-    const pool = C.names.filter((n) => !taken.has(n));
-    return pool[Math.floor(r() * pool.length)] || C.names[0];
+    const pool = namesOf(s.scenario).filter((n) => !taken.has(n));
+    return pool[Math.floor(r() * pool.length)] || namesOf(s.scenario)[0];
   }
   function buildTeam(seed, scenario) {
     const r = rng(seed, scenario, 'team');
-    const names = shuffle(C.names, r);
+    const names = shuffle(namesOf(scenario), r);
     const depts = C.departments.map((d) => d.id);
     // Every inherited team has one weak link and one restless director.
     const weak = depts[Math.floor(r() * depts.length)];
@@ -650,7 +668,7 @@
     const d = s.team[dept];
     const r = rng(s.seed, s.scenario, 'cand', dept, s.t, d.hires || 0);
     const taken = new Set(Object.values(s.team).map((x) => x.name));
-    const names = shuffle(C.names.filter((n) => !taken.has(n)), r);
+    const names = shuffle(namesOf(s.scenario).filter((n) => !taken.has(n)), r);
     const traits = shuffle(C.traits.filter((x) => x.dept === dept), r);
     return [0, 1, 2].map((i) => ({
       name: names[i], trait: traits[i % traits.length].id,
@@ -778,7 +796,7 @@
     for (const si of C.situations) if (s.sit[si.id].on) gain += si.cap || 0;
     // A loyal team carries change for you; empty seats slow everything down.
     const loy = teamAvg(s, 'loy');
-    gain += (loy > 0.65 ? 1 : loy < 0.35 ? -1 : 0) - Object.values(s.team).filter((d) => d.vacant).length;
+    gain += (loy > 0.65 ? 1 : loy < 0.35 ? -1 : 0) - Object.values(s.team).filter((d) => d.vacant).length + MODE(s).capGain;
     return Math.max(1, gain);
   }
 
@@ -830,15 +848,17 @@
     const sc = SCEN[opts.scenario];
     const length = opts.length || 12;
     const seed = String(opts.seed || 'MBA').trim().toUpperCase() || 'MBA';
+    const mode = MODES[opts.mode] ? opts.mode : 'normal';
+    const B = LOC(sc.id);
     const s = {
-      v: 2, scenario: sc.id, seed, length, t: 0, year0: opts.year0 || 2027, status: 'playing', endReason: null,
+      v: 2, scenario: sc.id, seed, length, mode: 'normal', t: 0, year0: opts.year0 || 2027, status: 'playing', endReason: null,
       vars: {}, pol: {}, polStart: {}, groups: {}, sit: {}, mods: [], baseAdj: { ...sc.baseAdj },
       finMods: { revMult: 0, cogsAdd: 0, opexAdd: 0 }, flags: {}, marketShock: 1, compBase: sc.compBase,
-      macro: { gdp: MACRO_BASE.gdp, bi: MACRO_BASE.bi, input: MACRO_BASE.input, fx: MACRO_BASE.fx, comp: sc.compBase },
+      macro: { gdp: B.gdp, bi: B.rate, input: 1, fx: B.fx, comp: sc.compBase },
       fin: { M: sc.M, cash: sc.cash, debt: sc.debt, shares: sc.shares, shares0: sc.shares, cumDps: 0, ratingIdx: 3, logPS: Math.log(sc.ps), price: 0 },
       finHist: [], hist: { vars: [], groups: [], approval: [], macro: [], team: [] },
       capital: 12, qSpend: 0, qExtra: 0, pending: [], log: [], dilemma: null, rupslbRun: 0, sig: {},
-      timeline: buildTimeline(seed, sc.id, length),
+      timeline: buildTimeline(seed, sc.id, length, mode),
       deck: buildDeck(seed, sc.id),
       team: buildTeam(seed, sc.id),
       projects: { active: [], done: [], cancelled: [] },
@@ -858,8 +878,26 @@
     for (let i = 0; i < 60; i++) stepVars(s, 2);
     for (const k in sc.start || {}) s.vars[k] = clamp(s.vars[k] + sc.start[k], 0.02, 0.98);
     s.fin.volRef = volume(s);
+    settleStart(s, sc);
+    // Crises already in force when you take office belong to the starting picture. Fixed
+    // costs stay sized for the business before the crisis.
+    if (C.situations.some((si) => s.sit[si.id].on)) {
+      for (const k in sc.start || {}) s.vars[k] -= sc.start[k];
+      for (let i = 0; i < 40; i++) stepVars(s, 2);
+      for (const k in sc.start || {}) s.vars[k] = clamp(s.vars[k] + sc.start[k], 0.02, 0.98);
+      settleStart(s, sc);
+    }
+    // The difficulty shapes the world from your first quarter on, not the company you inherit.
+    s.mode = mode;
+    s.start = { price: s.fin.price, share: s.vars.share, approval: approval(s), vars: { ...s.vars } };
+    record(s);
+    return s;
+  }
 
-    // The quarter before you took office, plus a synthetic year of history.
+  // The quarter before you took office, plus a synthetic year of history, then the
+  // stakeholders' first reading of it.
+  function settleStart(s, sc) {
+    s.finHist = [];
     const pl = computePL(s);
     for (let k = 4; k >= 1; k--) {
       const scale = Math.pow(1 + sc.initGrowth, -k / 4);
@@ -874,9 +912,6 @@
     for (const g of C.groups) s.groups[g.id] = { h: 0.5 };
     for (let i = 0; i < 3; i++) stepGroups(s, true);
     stepSituations(s, null);
-    s.start = { price: s.fin.price, share: s.vars.share, approval: approval(s), vars: { ...s.vars } };
-    record(s);
-    return s;
   }
 
   function record(s) {
@@ -894,6 +929,7 @@
     if (!s.hist.team) s.hist.team = [];
     s.qSpend = s.qSpend || 0;
     s.qExtra = s.qExtra || 0;
+    s.mode = s.mode || 'normal';
     s.v = 2;
     return s;
   }
@@ -1022,7 +1058,7 @@
   function explainGroup(s, id) { return groupTargets(s, id); }
 
   root.CEO_ENGINE = {
-    RATINGS, SPREAD, SHARE_SCALE, CAPITAL_MAX, TAX,
+    RATINGS, SPREAD, SHARE_SCALE, CAPITAL_MAX, TAX, LOC, MODES, MODE,
     VAR, POL, GRP, SIT, SCEN, DIL, MEV,
     newGame, endQuarter, chooseDilemma, setPolicy, revertPolicy, changeCost, capitalSpent, capitalLeft, capitalGain,
     defs, theory, inScenario, flagOn, migrate,

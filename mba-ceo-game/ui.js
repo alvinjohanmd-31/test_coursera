@@ -23,6 +23,8 @@
   const VL = () => D().var;
   const GL = () => D().grp;
   const SL = () => D().sit;
+  // A situation with the scenario's renames (falls back to the shared definition).
+  const SI = (id) => (S && D().SIT[id]) || E.SIT[id];
 
   // Icons (Lucide, bundled in icons.js). Content items may override with an `icon` field.
   const ICONS = window.CEO_ICONS || {};
@@ -40,10 +42,10 @@
     regulators: 'gavel', suppliers: 'package', community: 'house', activists: 'bird',
   };
   function iconName(kind, id) {
-    const o = kind === 'pol' ? P(id) : kind === 'var' ? V(id) : kind === 'grp' ? G(id) : kind === 'sit' ? E.SIT[id] : kind === 'scen' ? E.SCEN[id] : null;
+    const o = kind === 'pol' ? P(id) : kind === 'var' ? V(id) : kind === 'grp' ? G(id) : kind === 'sit' ? SI(id) : kind === 'scen' ? E.SCEN[id] : null;
     if (o && o.icon) return o.icon;
     if (ICON_OF[id]) return ICON_OF[id];
-    return kind === 'sit' && E.SIT[id].kind === 'bad' ? 'triangle-alert' : 'sparkles';
+    return kind === 'sit' && SI(id).kind === 'bad' ? 'triangle-alert' : 'sparkles';
   }
   const ico = (name, cls = '') => (ICONS[name] ? `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>` : '');
   // Icon drawn inside the strategy-map SVG, centered on (0, y).
@@ -55,7 +57,7 @@
 
   let S = null; // game state (engine)
   const U = {
-    lang: 'id', scenario: 'turnaround', seed: 'MBA-2027', length: 20, slot: 1,
+    lang: 'id', scenario: 'turnaround', seed: 'MBA-2027', length: 20, slot: 1, mode: 'normal',
     mainTab: 'map', railTab: 'stake', modal: null, stack: [], queue: [], lastReport: null,
     hover: null, slots: [null, null, null], busy: false,
   };
@@ -115,7 +117,7 @@
     plRevenue: ['Pendapatan', 'Revenue'], plCogs: ['Harga pokok penjualan', 'Cost of goods sold'], plGross: ['Laba kotor', 'Gross profit'],
     plOpex: ['Beban operasional', 'Operating expense'], plCarbon: ['Pajak karbon', 'Carbon tax'], plPolicies: ['Biaya kebijakan (bersih)', 'Policy costs (net)'],
     plDa: ['Penyusutan & amortisasi', 'Depreciation & amortization'], plInterest: ['Beban bunga bersih', 'Net interest'],
-    plExtra: ['Pos luar biasa (pesangon, denda)', 'One-offs (severance, fines)'], plTax: ['Pajak penghasilan 22%', 'Income tax 22%'],
+    plExtra: ['Pos luar biasa (pesangon, denda)', 'One-offs (severance, fines)'], plTax: ['Pajak penghasilan {0}', 'Income tax {0}'],
     plDiv: ['Dividen dibayar', 'Dividends paid'], plBuyback: ['Buyback', 'Buyback'], plCapex: ['Capex inisiatif baru', 'Capex for new initiatives'],
     plRepay: ['Pelunasan utang', 'Debt repaid'], plBorrow: ['Pinjaman darurat', 'Emergency borrowing'],
     topCosts: ['Biaya kebijakan terbesar', 'Largest policy costs'],
@@ -234,7 +236,14 @@
     pendingCap: ['{0} terpakai kuartal ini', '{0} committed this quarter'],
     story: ['Cerita perusahaan', 'Company story'], prolog: ['Prolog', 'Prologue'], chapter: ['Bab {0}', 'Chapter {0}'], epilogue: ['Epilog', 'Epilogue'],
     yearEnd: ['Akhir tahun {0}', 'End of year {0}'], readProlog: ['Baca prolog', 'Read the prologue'], begin: ['Mulai {0}', 'Begin {0}'],
-    yourTargets: ['Sasaran dari Dewan Komisaris', 'Targets from the board'], newTag: ['Baru', 'New'],
+    yourTargets: ['Sasaran dari Dewan Komisaris', 'Targets from the board'], newTag: ['Baru', 'New'], extremeTag: ['Ekstrem', 'Extreme'],
+    modeNormal: ['Normal', 'Normal'], modeHard: ['Sulit', 'Hard'],
+    modeNormalD: ['Guncangan ekonomi, risiko, dan suasana hati pemangku kepentingan seperti biasa.', 'Economic shocks, risks and stakeholder moods as usual.'],
+    modeHardD: ['Lebih banyak guncangan ekonomi, risiko lebih sering, krisis lebih mudah muncul, pemangku kepentingan lebih kritis, dan modal politik −1 per kuartal.', 'More economic shocks, more frequent risks, crises that trigger sooner, tougher stakeholders and −1 political capital per quarter.'],
+    explMode: ['Tingkat kesulitan: Sulit', 'Difficulty: Hard'],
+    theorySitHelp: ['Teori di balik krisis & peluang', 'Theories behind crises & opportunities'],
+    theoryTraitHelp: ['Teori di balik tipe direktur', 'Theories behind director types'],
+    theoryProjHelp: ['Teori di balik proyek strategis', 'Theories behind strategic projects'],
     theoryTitle: ['Teori di balik panah ini', 'The theory behind these arrows'],
     theoryHelp: ['Kamus teori bisnis', 'Business theory glossary'],
     theoryHelpD: ['Teori yang menjelaskan hubungan sebab-akibat penting di peta strategi. Teori yang sama juga muncul saat Anda mengarahkan kursor ke node dan di setiap jendela detail.', 'The theories behind the key cause-and-effect links on the strategy map. They also appear when you hover a node and in every detail dialog.'],
@@ -310,23 +319,26 @@
     const k = U.lang + d;
     return nfCache[k] || (nfCache[k] = new Intl.NumberFormat(U.lang === 'id' ? 'id-ID' : 'en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
   };
-  function money(v) {
-    const a = Math.abs(v), neg = v < -0.5;
+  // Amounts are billions of rupiah, or millions of yen for the Japanese company.
+  const curOf = (scenario) => (scenario || S ? E.LOC(scenario || S.scenario).currency : 'IDR');
+  function money(v, cur = curOf()) {
+    const a = Math.abs(v), neg = v < -0.5, id = U.lang === 'id', big = a >= 1000, n = big ? nf(a >= 10000 ? 1 : 2).format(a / 1000) : nf(0).format(a);
     let s;
-    if (U.lang === 'id') s = a >= 1000 ? `Rp ${nf(a >= 10000 ? 1 : 2).format(a / 1000)} T` : `Rp ${nf(0).format(a)} M`;
-    else s = a >= 1000 ? `IDR ${nf(a >= 10000 ? 1 : 2).format(a / 1000)} tn` : `IDR ${nf(0).format(a)} bn`;
+    if (cur === 'JPY') s = id ? `¥ ${n} ${big ? 'M' : 'jt'}` : `¥${n} ${big ? 'bn' : 'm'}`;
+    else if (id) s = `Rp ${n} ${big ? 'T' : 'M'}`;
+    else s = `IDR ${n} ${big ? 'tn' : 'bn'}`;
     return (neg ? '−' : '') + s;
   }
-  function moneyShort(v) {
-    const a = Math.abs(v), neg = v < -0.5;
+  function moneyShort(v, cur = curOf()) {
+    const a = Math.abs(v), neg = v < -0.5, id = U.lang === 'id', big = a >= 1000;
     if (a < 0.5) return '0';
-    const s = a >= 1000 ? nf(1).format(a / 1000) + (U.lang === 'id' ? 'T' : 'tn') : nf(0).format(a) + (U.lang === 'id' ? 'M' : 'bn');
-    return (neg ? '−' : '') + s;
+    const unit = cur === 'JPY' ? (big ? (id ? 'M' : 'bn') : (id ? 'jt' : 'm')) : big ? (id ? 'T' : 'tn') : (id ? 'M' : 'bn');
+    return (neg ? '−' : '') + (big ? nf(1).format(a / 1000) : nf(0).format(a)) + unit;
   }
   const pct = (v, d = 0) => nf(d).format(v * 100) + '%';
   const spct = (v, d = 0) => (v >= 0 ? '+' : '−') + nf(d).format(Math.abs(v * 100)) + '%';
   const pts = (v, d = 1) => (v >= 0 ? '+' : '−') + nf(d).format(Math.abs(v * 100));
-  const priceStr = (v) => (U.lang === 'id' ? 'Rp ' : 'IDR ') + nf(0).format(v);
+  const priceStr = (v, cur = curOf()) => (cur === 'JPY' ? '¥' : U.lang === 'id' ? 'Rp ' : 'IDR ') + nf(0).format(v);
   const qLabel = (t) => `Q${((t - 1) % 4) + 1} ${S.year0 + Math.floor((t - 1) / 4)}`;
   const curQ = () => S.t + 1;
   const signCls = (v, eps = 1e-4) => (v > eps ? 'pos' : v < -eps ? 'neg' : 'muted');
@@ -357,7 +369,7 @@
     if (STR['src' + id]) return tr('src' + id);
     if (E.PRJ[id]) return L(E.PRJ[id].name);
     if (id.startsWith('g:')) return L(G(id.slice(2)).name);
-    const o = V(id) || P(id) || E.SIT[id] || FIN[id] || G(id) || E.DIL[id] || E.MEV[id] || REV[id];
+    const o = V(id) || P(id) || SI(id) || FIN[id] || G(id) || E.DIL[id] || E.MEV[id] || REV[id];
     if (!o) return id;
     if (E.DIL[id]) return L(o.title);
     return L(short && o.short ? o.short : o.name);
@@ -366,12 +378,12 @@
   /* --------------------------------------------------------- persistence */
 
   function savePrefs() {
-    try { localStorage.setItem(PREF_KEY, JSON.stringify({ lang: U.lang, scenario: U.scenario, seed: U.seed, length: U.length, slot: U.slot })); } catch (e) { /* storage unavailable */ }
+    try { localStorage.setItem(PREF_KEY, JSON.stringify({ lang: U.lang, scenario: U.scenario, seed: U.seed, length: U.length, slot: U.slot, mode: U.mode })); } catch (e) { /* storage unavailable */ }
   }
   function loadPrefs() {
     try {
       const p = JSON.parse(localStorage.getItem(PREF_KEY) || 'null');
-      if (p) Object.assign(U, { lang: p.lang || U.lang, scenario: E.SCEN[p.scenario] ? p.scenario : U.scenario, seed: p.seed || U.seed, length: [8, 12, 20].includes(p.length) ? p.length : U.length, slot: SLOTS.includes(p.slot) ? p.slot : U.slot });
+      if (p) Object.assign(U, { lang: p.lang || U.lang, scenario: E.SCEN[p.scenario] ? p.scenario : U.scenario, seed: p.seed || U.seed, length: [8, 12, 20].includes(p.length) ? p.length : U.length, slot: SLOTS.includes(p.slot) ? p.slot : U.slot, mode: E.MODES[p.mode] ? p.mode : U.mode });
     } catch (e) { /* storage unavailable */ }
   }
   // Three save slots; every quarter autosaves into the slot the game was started in.
@@ -461,7 +473,7 @@
       return `<div class="slot ${picked ? 'picked' : ''}" style="--tone:var(--d-${sc.tone || 'inn'})">
         <div class="slot-top"><span class="eyebrow">${tr('slotN', n)}</span><span class="muted mono">${esc(when)}</span></div>
         <div class="slot-body"><span class="scen-ico">${ico(sc.icon)}</span><div><b>${esc(sc.company)}</b>
-          <span class="muted">${esc(L(sc.name))} · ${done ? tr('finishedGrade', grade) : tr('quarterOf', q, st.length)}</span>
+          <span class="muted">${esc(L(sc.name))}${st.mode === 'hard' ? ' · ' + tr('modeHard') : ''} · ${done ? tr('finishedGrade', grade) : tr('quarterOf', q, st.length)}</span>
           <span class="muted mono">${tr('classCode')} ${esc(st.seed)}</span></div></div>
         <div class="slot-actions"><button class="btn small primary" data-act="resume" data-id="${n}">${tr('slotResume')}</button>
           <button class="btn small ghost" data-act="slot" data-id="${n}" aria-pressed="${picked}">${picked ? '✓ ' + tr('slotPicked') : tr('slotPick')}</button>
@@ -474,13 +486,15 @@
     const cards = C.scenarios.map((sc) => {
       const st = statCache[sc.id] || (statCache[sc.id] = scenarioStats(sc));
       const dots = [1, 2, 3].map((i) => `<i class="${i <= sc.difficulty ? 'on' : ''}"></i>`).join('');
-      const fresh = sc.id === 'health' || sc.id === 'creator';
-      return `<button class="scen" data-act="scenario" data-id="${sc.id}" aria-pressed="${U.scenario === sc.id}" style="--tone:var(--d-${sc.tone || 'inn'})">
-        <div class="scen-head"><span class="scen-ico">${ico(sc.icon)}</span><h3>${esc(L(sc.name))}</h3>${fresh ? `<span class="new-tag">${tr('newTag')}</span>` : ''}<span class="dots" title="${tr('difficulty')}" aria-label="${tr('difficulty')} ${sc.difficulty}/3">${dots}</span></div>
+      const fresh = sc.id === 'ryokan';
+      return `<button class="scen ${sc.extreme ? 'extreme' : ''}" data-act="scenario" data-id="${sc.id}" aria-pressed="${U.scenario === sc.id}" style="--tone:var(--d-${sc.tone || 'inn'})">
+        <div class="scen-head"><span class="scen-ico">${ico(sc.icon)}</span><h3>${esc(L(sc.name))}</h3>${fresh ? `<span class="new-tag">${tr('newTag')}</span>` : ''}${sc.extreme
+          ? `<span class="x-tag" title="${tr('difficulty')}">${tr('extremeTag')}</span>`
+          : `<span class="dots" title="${tr('difficulty')}" aria-label="${tr('difficulty')} ${sc.difficulty}/3">${dots}</span>`}</div>
         <div><div class="company">${esc(sc.company)}</div><div class="eyebrow">${esc(L(sc.industry))}</div></div>
         <p class="brief">${esc(L(sc.brief))}</p>
         <div class="scen-stats">
-          <div><span class="eyebrow">${tr('revenueQ')}</span><b>${money(st.rev)}</b></div>
+          <div><span class="eyebrow">${tr('revenueQ')}</span><b>${money(st.rev, curOf(sc.id))}</b></div>
           <div><span class="eyebrow">${tr('rating')}</span><b>${st.rating}</b></div>
           <div><span class="eyebrow">${tr('marketShare')}</span><b>${pct(st.share, 1)}</b></div>
         </div>
@@ -489,6 +503,7 @@
     const map = [['mapPolicies', 'mapPoliciesD'], ['mapCapital', 'mapCapitalD'], ['mapStake', 'mapStakeD'], ['mapRups', 'mapRupsD'], ['mapTeam', 'mapTeamD'], ['mapProj', 'mapProjD'], ['mapSit', 'mapSitD'], ['mapCase', 'mapCaseD']]
       .map(([a, b]) => `<div><b>${tr(a)}</b><span>${tr(b, C.dilemmas.length)}</span></div>`).join('');
     const terms = [[8, 'q8'], [12, 'q12'], [20, 'q20']].map(([n, k]) => `<button data-act="length" data-id="${n}" aria-pressed="${U.length === n}">${tr(k)}</button>`).join('');
+    const modes = [['normal', 'modeNormal'], ['hard', 'modeHard']].map(([m, k]) => `<button data-act="mode" data-id="${m}" aria-pressed="${U.mode === m}">${tr(k)}</button>`).join('');
     return `<div class="start"><div class="start-inner">
       <div class="start-top">
         <div class="wordmark">${logo()}<span>CEO Mandate · ${tr('tagline')}</span></div>
@@ -516,6 +531,7 @@
         <div class="setup-fields">
           <div class="field"><label for="seed">${tr('classCode')}</label><input id="seed" type="text" maxlength="24" value="${esc(U.seed)}" autocomplete="off" spellcheck="false"><span class="help">${tr('classCodeHelp')}</span></div>
           <div class="field"><span class="label">${tr('duration')}</span><div class="seg" role="group" aria-label="${tr('duration')}">${terms}</div><span class="help">${tr('termNote')}</span></div>
+          <div class="field"><span class="label">${tr('difficulty')}</span><div class="seg" role="group" aria-label="${tr('difficulty')}">${modes}</div><span class="help">${tr(U.mode === 'hard' ? 'modeHardD' : 'modeNormalD')}</span></div>
         </div>
         <div class="setup-actions"><button class="btn primary" data-act="start">${tr('startIn', U.slot)} →</button></div>
       </section>
@@ -544,7 +560,7 @@
     const nr = nextRupsQ() - S.t;
     const playing = S.status === 'playing';
     return `<header class="topbar">
-      <div class="co"><span class="co-ico" style="--tone:var(--d-${E.SCEN[S.scenario].tone || 'inn'})">${ico(E.SCEN[S.scenario].icon)}</span><b>${esc(E.SCEN[S.scenario].company)}</b><span>${playing ? `${qLabel(curQ())} · ${tr('quarterOf', curQ(), S.length)} · ${tr('nextRups')} ${nr <= 1 ? tr('thisQ') : tr('inQ', nr)}` : tr('gameOver')}</span></div>
+      <div class="co"><span class="co-ico" style="--tone:var(--d-${E.SCEN[S.scenario].tone || 'inn'})">${ico(E.SCEN[S.scenario].icon)}</span><b>${esc(E.SCEN[S.scenario].company)}</b><span>${S.mode === 'hard' ? `<em class="mode-flag">${tr('modeHard')}</em> ` : ''}${playing ? `${qLabel(curQ())} · ${tr('quarterOf', curQ(), S.length)} · ${tr('nextRups')} ${nr <= 1 ? tr('thisQ') : tr('inQ', nr)}` : tr('gameOver')}</span></div>
       <div class="meters">
         <button class="meter big" data-act="rail" data-id="stake" title="${tr('confidence')}"><span class="k">${tr('confShort')}</span><span class="v ${ap < 0.5 ? 'neg' : ''}">${pct(ap)}</span><span class="conf-bar"><i style="width:${(ap * 100).toFixed(1)}%"></i><b></b></span></button>
         <div class="meter" title="${tr('capital')}"><span class="k">${tr('capShort')}</span><span class="v">${left}<small class="muted">${spent ? `/ ${S.capital}` : ''}</small></span></div>
@@ -661,7 +677,7 @@
     }
     out.push(`<div class="persp-h"><div class="eyebrow">${tr('riskRadar')}</div><p class="muted" style="font-size:12px;margin-top:4px">${tr('riskRadarD')}</p></div>`);
     for (const si of SL()) {
-      const st = S.sit[si.id], on = E.sitOn(si);
+      const st = S.sit[si.id], on = E.sitOn(si, S);
       const sc = E.sitScore(S, si.id);
       const bad = si.kind === 'bad';
       out.push(`<button class="kcard" data-act="detail" data-type="sit" data-id="${si.id}">
@@ -678,6 +694,7 @@
   const loyCol = (v) => (v < 0.3 ? 'var(--neg)' : v < 0.5 ? 'var(--warn)' : 'var(--pos)');
   const meterBar = (v, col) => `<span class="hbar"><i style="width:${(clamp(v) * 100).toFixed(1)}%;background:${col}"></i></span>`;
   const theoryBox = (text) => `<div class="theory-inline">${ico('book-open')}<span>${text}</span></div>`;
+  const theorySmall = (text) => `<p class="theory-small">${ico('book-open')}<span>${esc(text)}</span></p>`;
   // Policy level as a director sees it: on/off sliders by intensity, bipolar ones by direction.
   function polLevel(id) {
     const p = P(id), st = S.pol[id];
@@ -709,6 +726,7 @@
       const fresh = d.since > 0 && S.t - d.since < 2;
       return `<div class="dcard">${dirHead(dep.id, d)}
         <div class="trait"><span class="tag info">${esc(L(trt.name))}</span><span>${esc(L(trt.desc))}</span></div>
+        ${trt.theory ? theorySmall(L(trt.theory)) : ''}
         <div class="dmeter"><span>${tr('competence')}</span>${meterBar(comp, 'var(--ink-2)')}<span class="mono">${nf(0).format(comp * 100)}</span></div>
         <div class="dmeter"><span>${tr('loyalty')}</span>${meterBar(d.loy, loyCol(d.loy))}<span class="mono ${d.loy < 0.3 ? 'neg' : ''}">${nf(0).format(d.loy * 100)} ${arrow(tgt - d.loy, 0.01)}</span></div>
         <div class="agenda"><span class="eyebrow">${tr('agendaLikes')}</span><div>${agendaChips(trt.likes, true)}</div></div>
@@ -760,6 +778,7 @@
       <div class="dcard-head"><span class="chip" style="background:var(--d-${p.dept});color:var(--di-${p.dept})">${ico(p.icon)}</span><div><span class="eyebrow">${esc(L(DEPT[p.dept].name))}</span><b>${esc(L(p.name))}</b></div></div>
       <span class="mono muted small">${esc(lead)}</span>
       <p class="muted">${esc(L(p.desc))}</p>
+      ${p.theory ? theorySmall(L(p.theory)) : ''}
       ${body}
       <div class="gains"><span class="eyebrow">${tr('projGains')}</span>${projGains(p.fx)}</div>
       ${p.during ? `<div class="gains"><span class="eyebrow">${tr('projDuring')}</span><span class="gain neg">${esc(tr('projRevenue', spct(p.during.revMult || 0, 0)))}</span></div>` : ''}
@@ -872,7 +891,7 @@
       ...(pl.div ? [['plDiv', -pl.div, 'sub']] : []), ...(pl.buyback ? [['plBuyback', -pl.buyback, 'sub']] : []), ...(pl.capex ? [['plCapex', -pl.capex, 'sub']] : []),
       ...(pl.repay ? [['plRepay', -pl.repay, 'sub']] : []), ...(pl.borrowed ? [['plBorrow', pl.borrowed, 'sub']] : []),
     ];
-    return `<table class="pl">${rows.map(([k, v, cls]) => `<tr class="${cls || ''}"><td>${tr(k)}</td><td class="${v < -0.5 && cls === 'sum' ? 'neg' : ''}">${money(v)}</td></tr>`).join('')}</table>`;
+    return `<table class="pl">${rows.map(([k, v, cls]) => `<tr class="${cls || ''}"><td>${tr(k, pct(E.LOC(S.scenario).tax))}</td><td class="${v < -0.5 && cls === 'sum' ? 'neg' : ''}">${money(v)}</td></tr>`).join('')}</table>`;
   }
 
   function renderFinance() {
@@ -910,7 +929,7 @@
       const r = o.check(S, H);
       return `<div class="obj"><span class="ic ${r.ok ? 'ok' : ''}">${r.ok ? '✓' : ''}</span><span>${esc(L(o.text))}</span><span class="now">${esc(r.now)}</span></div>`;
     }).join('');
-    const m = S.macro, mh = S.hist.macro, m0 = mh.length > 1 ? mh[mh.length - 2] : m;
+    const m = S.macro, mh = S.hist.macro, m0 = mh.length > 1 ? mh[mh.length - 2] : m, loc = E.LOC(S.scenario);
     const mstat = (k, v, d) => `<div class="stat"><span class="eyebrow">${k}</span><span class="v">${v}</span><span class="d ${signCls(d, 1e-3)}">${Math.abs(d) > 1e-3 ? arrow(d) : ''}</span></div>`;
     const regimes = C.macroEvents.filter((e) => e.regime && S.flags[e.id]).map((e) => `<span class="flag">${esc(L(e.name))}</span>`).join('');
     const news = allNews();
@@ -919,8 +938,8 @@
       <div class="block"><h3>${tr('objectives')}</h3>${objs}</div>
       <div class="block"><h3>${tr('economy')}</h3><div class="macro">
         ${mstat(tr('gdp'), nf(1).format(m.gdp) + '%', m.gdp - m0.gdp)}
-        ${mstat(tr('bi'), nf(2).format(m.bi) + '%', m.bi - m0.bi)}
-        ${mstat(tr('fx'), nf(0).format(m.fx), m.fx - m0.fx)}
+        ${mstat(loc.rateName ? L(loc.rateName) : tr('bi'), nf(2).format(m.bi) + '%', m.bi - m0.bi)}
+        ${mstat(loc.fxName ? L(loc.fxName) : tr('fx'), nf(loc.fx < 1000 ? 1 : 0).format(m.fx), m.fx - m0.fx)}
         ${mstat(tr('inputIdx'), nf(2).format(m.input), m.input - m0.input)}
         ${mstat(tr('competition'), pct(m.comp), m.comp - m0.comp)}
         ${mstat(tr('marketSize'), money(S.fin.M), 0)}
@@ -1145,7 +1164,7 @@
     const f = S.fin;
     if (id === 'f_revenue') return { v: moneyShort(f.last.revenue), sub: '/Q' };
     if (id === 'f_profit') return { v: moneyShort(f.last.ni), sub: pct(f.last.ni / f.last.revenue, 1) };
-    if (id === 'f_price') return { v: nf(0).format(f.price), sub: U.lang === 'id' ? 'Rp' : 'IDR' };
+    if (id === 'f_price') return { v: nf(0).format(f.price), sub: curOf() === 'JPY' ? '¥' : U.lang === 'id' ? 'Rp' : 'IDR' };
     return { v: E.RATINGS[f.ratingIdx], sub: pct(f.last.rate, 1) };
   }
 
@@ -1292,7 +1311,7 @@
       activeSits.forEach((si) => { sitOut(si); });
       for (let i = out.length - 1; i >= 0; i--) if (out[i].a !== key && out[i].b !== key) out.splice(i, 1);
     } else if (type === 'sit') {
-      const si = E.SIT[id];
+      const si = SI(id);
       sitIn(si);
       sitOut(si);
     }
@@ -1325,14 +1344,16 @@
       n.classList.toggle('self', k === key);
     });
     showTip(key);
-    showTheories(rel);
+    showTheories(rel, key);
     previewReactions(key);
   }
-  // Up to three theories behind the strongest arrows of the hovered node.
-  function showTheories(rel) {
+  // Up to three theories: the hovered crisis's own, then those behind the strongest arrows.
+  function showTheories(rel, key = '') {
     const card = document.getElementById('theory');
     if (!card) return;
     const seen = new Set(), items = [];
+    const own = key.startsWith('sit:') ? SI(key.slice(4)).theory : null;
+    if (own) items.push(`<div class="th-item"><span class="th-link">${esc(L(SI(key.slice(4)).short || SI(key.slice(4)).name))}</span><b>${esc(L(own.name))}</b><span>${esc(L(own.text))}</span></div>`);
     for (const r of rel.slice().sort((a, b) => (a.potential - b.potential) || (b.w - a.w))) {
       const th = theoryOf(r.a.split(':')[1], r.b.split(':')[1]);
       if (!th || seen.has(th)) continue;
@@ -1365,7 +1386,7 @@
     if (type === 'pol') { const p = P(id), st = S.pol[id]; title = L(p.name); line = st.on ? policyLabel(p, st.x) : tr('inactive'); }
     if (type === 'var') { const v = V(id); title = L(v.name); line = `${kpiValueText(id)} · ${tr('heading', nf(0).format(E.explainVar(S, id).target * 100))}`; }
     if (type === 'fin') { title = L(FIN[id].name); line = finValue(id).v; }
-    if (type === 'sit') { const si = E.SIT[id]; title = L(si.name); line = L(si.desc); }
+    if (type === 'sit') { const si = SI(id); title = L(si.name); line = L(si.desc); }
     tip.innerHTML = `<b>${esc(title)}</b><span class="num">${esc(line)}</span><br><span style="opacity:.7">${tr('clickDetail')}</span>`;
     tip.hidden = false;
     const tw = tip.offsetWidth, th = tip.offsetHeight;
@@ -1529,6 +1550,7 @@
       if (pt.kind === 'base') name = tr('explBase');
       else if (pt.kind === 'struct') name = tr('explStruct');
       else if (pt.kind === 'flag') name = L(E.MEV[pt.ref].name);
+      else if (pt.kind === 'mode') name = tr('explMode');
       else name = nameOf(pt.ref);
       const act = pt.kind === 'pol' ? `data-act="detail" data-type="pol" data-id="${pt.ref}"` : pt.kind === 'var' ? `data-act="detail" data-type="var" data-id="${pt.ref}"`
         : pt.kind === 'sit' ? `data-act="detail" data-type="sit" data-id="${pt.ref}"` : pt.kind === 'in' && keyOf(pt.ref) && !pt.ref.startsWith('f:') ? `data-act="detail" data-type="${keyOf(pt.ref).split(':')[0]}" data-id="${pt.ref}"` : '';
@@ -1603,8 +1625,8 @@
   }
 
   function modalSit(m) {
-    const si = E.SIT[m.id], st = S.sit[m.id], bad = si.kind === 'bad';
-    const sc = E.sitScore(S, m.id), on = E.sitOn(si), off = E.sitOff(si);
+    const si = SI(m.id), st = S.sit[m.id], bad = si.kind === 'bad';
+    const sc = E.sitScore(S, m.id), on = E.sitOn(si, S), off = E.sitOff(si, S);
     const wsum = si.inputs.reduce((a, [, w]) => a + w, 0);
     const causes = si.inputs.map(([sid, w, mode]) => {
       let v = E.src(S, sid);
@@ -1627,6 +1649,7 @@
     return `${head(`<span class="tag ${bad ? 'bad' : 'good'}">${bad ? tr('crisis') : tr('opportunity')}</span>${st.on ? tr('activeSince', qLabel(Math.max(1, st.since || 1))) : tr('inactive')}`, esc(L(si.name)))}
       <div class="m-body">
         <p class="lead">${esc(L(si.desc))}</p>
+        ${si.theory ? theoryBox(`<b>${esc(L(si.theory.name))}.</b> ${esc(L(si.theory.text))}`) : ''}
         ${si.requires ? `<p class="muted" style="font-size:12.5px">${tr('requires', esc(L(P(si.requires).name)))}</p>` : ''}
         <div class="control"><div class="control-top"><span class="eyebrow">${tr('triggerLevel')}</span><span class="control-val">${pct(sc)}</span></div>
           <div class="meter-trig"><i style="width:${(sc * 100).toFixed(1)}%;background:${col}"></i><b style="left:${(on * 100).toFixed(1)}%"></b><em style="left:${(off * 100).toFixed(1)}%"></em></div>
@@ -1666,7 +1689,7 @@
     const rstat = (k, v, d, cls = '') => `<div class="rstat"><span class="eyebrow">${k}</span><span class="v ${cls}">${v}</span><span class="d">${d}</span></div>`;
     const news = rep.news.map((n) => { const x = newsText(n); return `<div class="news-item"><span class="q"><span class="tag ${x.tag}">${esc(x.label)}</span></span><span>${esc(x.text)}</span></div>`; }).join('');
     const sits = [...rep.started.map((id) => ({ id, s: 1 })), ...rep.ended.map((id) => ({ id, s: 0 }))].map(({ id, s }) => {
-      const si = E.SIT[id], bad = si.kind === 'bad';
+      const si = SI(id), bad = si.kind === 'bad';
       return `<div class="news-item"><span class="q"><span class="tag ${s ? (bad ? 'bad' : 'good') : 'info'}">${s ? (bad ? tr('crisis') : tr('opportunity')) : (U.lang === 'id' ? 'Selesai' : 'Over')}</span></span><span><button class="btn ghost small" style="padding:0;min-height:0" data-act="detail" data-type="sit" data-id="${id}">${esc(L(si.name))}</button></span></div>`;
     }).join('');
     const vm = VL().map((v) => ({ n: L(v.name), d: S.vars[v.id] - b.vars[v.id], type: 'var', id: v.id }));
@@ -1740,7 +1763,7 @@
       : S.endReason === 'bankrupt' ? 'PKPU' : (U.lang === 'id' ? `Diberhentikan di ${qLabel(S.t)}` : `Dismissed in ${qLabel(S.t)}`);
     return [
       `CEO Mandate · ${tr('classCode')} ${S.seed}`,
-      `${L(sc.name)} (${sc.company}) · ${S.length} ${U.lang === 'id' ? 'kuartal' : 'quarters'}`,
+      `${L(sc.name)} (${sc.company}) · ${S.length} ${U.lang === 'id' ? 'kuartal' : 'quarters'} · ${tr('difficulty')} ${tr(S.mode === 'hard' ? 'modeHard' : 'modeNormal')}`,
       `${reason} · ${tr('score')} ${fs.total}/1000 (${fs.grade})`,
       `TSR ${spct(fs.tsr, 0)} · ${tr('ratingS')} ${E.RATINGS[S.fin.ratingIdx]} · ${tr('confidence')} ${pct(fs.approval)}`,
       `${tr('style')}: ${tr('style' + fs.style)}`,
@@ -1760,7 +1783,7 @@
     const objs = sc.objectives.map((o) => { const r = o.check(S, H); return `<div class="obj"><span class="ic ${r.ok ? 'ok' : ''}">${r.ok ? '✓' : ''}</span><span>${esc(L(o.text))}</span><span class="now">${esc(r.now)}</span></div>`; }).join('');
     const conf = S.hist.approval.map((v, i) => ({ v: v * 100, label: i === 0 ? (U.lang === 'id' ? 'Awal' : 'Start') : qLabel(i).replace(' 20', "'") }));
     const logRows = S.log.map(logRow).join('');
-    return `${head(`${esc(sc.company)} · ${tr('classCode')} ${esc(S.seed)}`, S.endReason === 'term' ? tr('endTitle') : tr('firedTitle'))}
+    return `${head(`${esc(sc.company)} · ${tr('classCode')} ${esc(S.seed)}${S.mode === 'hard' ? ' · ' + tr('modeHard') : ''}`, S.endReason === 'term' ? tr('endTitle') : tr('firedTitle'))}
       <div class="m-body">
         <p class="lead">${reason}</p>
         ${sc.story && sc.story.end ? `<div class="story-card big"><div class="story-head">${ico(sc.icon)}<span class="eyebrow">${tr('epilogue')}</span></div><p>${esc(L(sc.story.end[epilogueKey()]))}</p></div>` : ''}
@@ -1785,13 +1808,19 @@
 
   function modalHelp() {
     const rows = [['dPolicy', 'hPolicy'], ['dCapital', 'hCapital'], ['dCabinet', 'hCabinet'], ['dVoters', 'hVoters'], ['dElection', 'hElection'], ['dSituations', 'hSituations'], ['dDilemmas', 'hDilemmas'], ['dBudget', 'hBudget'], ['dAssassin', 'hAssassin']]
-      .map(([a, b]) => `<tr><td>${tr(a)}</td><td>${tr(b, b === 'hSituations' ? C.situations.length : C.dilemmas.length)}</td></tr>`).join('');
+      .map(([a, b]) => `<tr><td>${tr(a)}</td><td>${tr(b, b === 'hSituations' ? (S ? SL().length : C.situations.length) : S ? D().dil.length : C.dilemmas.length)}</td></tr>`).join('');
+    const glossary = (title, rows) => `<div class="block"><h3>${title}</h3><div class="tbl-wrap"><table class="tbl">${rows.join('')}</table></div></div>`;
+    const gRow = (k, name, text) => `<tr><td class="nowrap">${esc(k)}</td><td>${name ? `<b>${esc(name)}.</b> ` : ''}${esc(text)}</td></tr>`;
+    const extra = S ? glossary(tr('theorySitHelp'), SL().filter((si) => si.theory).map((si) => gRow(L(si.short || si.name), L(si.theory.name), L(si.theory.text))))
+      + glossary(tr('theoryTraitHelp'), C.traits.filter((x) => x.theory).map((x) => gRow(L(x.name), '', L(x.theory))))
+      + glossary(tr('theoryProjHelp'), E.projectList(S).filter((x) => x.theory).map((x) => gRow(L(x.name), '', L(x.theory)))) : '';
     return `${head('CEO Mandate', tr('helpTitle'))}
       <div class="m-body">
         <div class="block"><h3>${tr('helpGoal')}</h3><p class="lead">${tr('helpGoalD')}</p></div>
         <div class="help-steps">${['helpS1', 'helpS2', 'helpS3', 'helpS4', 'helpS5', 'helpS6', 'helpS7', 'helpS8', 'helpS9'].map((k) => `<div><p>${tr(k)}</p></div>`).join('')}</div>
         <div class="block"><h3>${tr('helpMapping')}</h3><div class="tbl-wrap"><table class="tbl"><tr><th>Democracy 3</th><th>${tr('helpHere')}</th></tr>${rows}</table></div></div>
-        ${S ? `<div class="block"><h3>${tr('theoryHelp')}</h3><p class="muted" style="margin-bottom:10px">${tr('theoryHelpD')}</p><div class="tbl-wrap"><table class="tbl"><tr><th>${tr('link')}</th><th>${tr('theory')}</th></tr>${D().theories.filter((th) => !th.only || th.only.includes(S.scenario)).map((th) => `<tr><td class="nowrap">${esc(nameOf(th.from, true))} → ${esc(nameOf(th.to, true))}</td><td><b>${esc(L(th.name))}.</b> ${esc(L(th.text))}</td></tr>`).join('')}</table></div></div>` : ''}
+        ${S ? `<div class="block"><h3>${tr('theoryHelp')}</h3><p class="muted" style="margin-bottom:10px">${tr('theoryHelpD')}</p><div class="tbl-wrap"><table class="tbl"><tr><th>${tr('link')}</th><th>${tr('theory')}</th></tr>${D().theories.map((th) => `<tr><td class="nowrap">${esc(nameOf(th.from, true))} → ${esc(nameOf(th.to, true))}</td><td><b>${esc(L(th.name))}.</b> ${esc(L(th.text))}</td></tr>`).join('')}</table></div></div>` : ''}
+        ${extra}
         <p class="muted" style="font-size:12.5px">${tr('keys')}</p>
         <p class="credit">${tr('credit')}</p>
       </div>
@@ -1840,6 +1869,7 @@
       return `<div class="cand">
         <div class="cand-top"><b>${esc(c.name)}</b><span class="tag info">${esc(L(trt.name))}</span></div>
         <p class="muted">${esc(L(trt.desc))}</p>
+        ${trt.theory ? theorySmall(L(trt.theory)) : ''}
         <div class="dmeter"><span>${tr('competence')}</span>${meterBar(c.comp, 'var(--ink-2)')}<span class="mono">${nf(0).format(c.comp * 100)}</span></div>
         <div class="agenda"><span class="eyebrow">${tr('agendaLikes')}</span><div>${agendaChips(trt.likes, true)}</div></div>
         <div class="agenda"><span class="eyebrow">${tr('agendaDislikes')}</span><div>${agendaChips(trt.dislikes, false)}</div></div>
@@ -1867,7 +1897,7 @@
     readSeedInput();
     savePrefs();
     if (!overwrite && U.slots[U.slot - 1]) { openModal({ type: 'confirm', kind: 'overwrite', slot: U.slot }); return; }
-    S = E.newGame({ scenario: U.scenario, seed: U.seed, length: U.length });
+    S = E.newGame({ scenario: U.scenario, seed: U.seed, length: U.length, mode: U.mode });
     U.queue = [];
     U.mainTab = 'map';
     U.railTab = 'stake';
@@ -1959,6 +1989,7 @@
       case 'lang': U.lang = id; savePrefs(); render(); if (U.modal) renderModal(); break;
       case 'scenario': U.scenario = id; readSeedInput(); savePrefs(); render(); break;
       case 'length': U.length = Number(id); readSeedInput(); savePrefs(); render(); break;
+      case 'mode': U.mode = id; readSeedInput(); savePrefs(); render(); break;
       case 'slot': U.slot = Number(id); readSeedInput(); savePrefs(); render(); break;
       case 'start': startGame(); break;
       case 'overwrite': U.modal = null; renderModal(); startGame(true); break;
